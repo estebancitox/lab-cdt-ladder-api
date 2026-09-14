@@ -1,0 +1,24 @@
+# Local Claude Code settings — machine-specific, never committed
+.claude/settings.local.json
+
+# Secrets and environment
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Build and deploy output
+dist/
+build/
+.aws-sam/
+samconfig.toml
+
+# OS and editor noise
+.DS_Store
+*.swp
+
+# Logs
+*.log
+npm-debug.log*
