@@ -1,0 +1,24 @@
+{
+  "name": "lab-cdt-ladder-api",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Explica mi escalera: one endpoint that explains a CDT ladder in plain Spanish. Session 2A: validation pipeline and explanation view, no model.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:ci": "TZ=America/Bogota vitest run && TZ=UTC vitest run",
+    "typecheck": "tsc --noEmit",
+    "verify:vendor": "bash scripts/verify-vendor.sh"
+  },
+  "dependencies": {
+    "ajv": "8.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.4",
+    "typescript": "7.0.2",
+    "vitest": "4.1.11"
+  }
+}
