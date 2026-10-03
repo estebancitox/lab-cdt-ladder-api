@@ -377,6 +377,7 @@ every evaluation rule.
 | `asOfDate` invalid or after the last maturity | 400 | `ERROR_MESSAGE` | `invalid_input` |
 | Model unavailable, overloaded or timed out | 503 | `UPSTREAM_MESSAGE` | `upstream_unavailable` |
 | Model response truncated at `max_tokens` | 503 | `UPSTREAM_MESSAGE` | `upstream_truncated` |
+| Unexpected internal error | 500 | `UPSTREAM_MESSAGE` | `internal_error` |
 
 Fixed strings, byte-exact:
 
@@ -801,6 +802,7 @@ comprehension.
 | Long entity names rejected, not truncated | Truncation would alter the user's data and could name an institution they did not write. |
 | `max_words` compares strictly, not inclusively | §4 states "under 200 words" while §11.9 first defined the rule as passing at "at most `n`", so `max_words:200` would have accepted exactly 200 words. The defect was in the rule definition, not in the fixture, and the repair keeps one number: the contract's 200 is the fixture's 200. An inclusive rule would have needed `max_words:199`, leaving two numbers to keep in agreement. The other eight per-case budgets — 150, 170 and 120 — each shift by one word as a side effect; they are internal budgets with no external referent, so the shift is immaterial. |
 | Rate-limit and spend alarm specified now, built later | An unauthenticated endpoint that spends money per request needs the control named even before it exists. |
+| Unexpected internal errors return 500 `internal_error` with `UPSTREAM_MESSAGE` (added 2026-10-02, session 2B) | A defect in the service is neither a refusal of the input nor an upstream outage, and §7 had no row for it. Folding it into 503 `upstream_unavailable` would make a bug indistinguishable from an outage, for the client and in a log line that carries only the status. Letting the exception escape would hand the client the platform's own error body and let the runtime log an error message that can carry request data, against §8.4. The handler catches everything, answers with the fixed string, and logs the fixed fields plus the class name of the error, never its message. |
 
 ### Deferred
 

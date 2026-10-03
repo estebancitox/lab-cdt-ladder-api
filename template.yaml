@@ -1,0 +1,75 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >-
+  Explica mi escalera v1, session 2B: one Lambda behind a buffered Function URL. The URL is
+  private (AuthType AWS_IAM) until the SPEC 8.2 controls exist.
+
+Parameters:
+  AnthropicApiKeyParameterName:
+    Type: String
+    Default: /lab-cdt-ladder-api/anthropic-api-key
+    AllowedPattern: '^/[A-Za-z0-9_.\-/]+$'
+    Description: >-
+      Name of the SSM SecureString that holds the Anthropic API key, with its leading slash. The
+      function may read this one parameter and nothing else. A parameter encrypted with a
+      customer-managed KMS key would also need kms:Decrypt on that key.
+
+Resources:
+  # Explicit so the logs expire: a log group Lambda creates on its own never does.
+  ExplainLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AWS::StackName}-explain
+      RetentionInDays: 14
+
+  ExplainFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      # The code is bundled: the vendored engine uses extensionless imports that Node's ESM
+      # resolver rejects at runtime. CommonJS output, because bundled dependencies call require()
+      # on Node built-ins, which an ESM bundle cannot do without a shim. UseNpmCi installs from
+      # the lockfile, dev dependencies included, which is where esbuild itself lives.
+      BuildMethod: esbuild
+      BuildProperties:
+        EntryPoints:
+          - src/handler.ts
+        Format: cjs
+        Target: node22
+        Minify: false
+        Sourcemap: false
+        UseNpmCi: true
+    Properties:
+      CodeUri: .
+      Handler: handler.handler
+      Runtime: nodejs22.x
+      Architectures:
+        - arm64
+      MemorySize: 256
+      # SPEC 8: strictly greater than the 20 s model deadline.
+      Timeout: 25
+      # At most two requests spend money at the same time. If the account quota refuses this,
+      # the setting stays and the quota is what gets fixed.
+      ReservedConcurrentExecutions: 2
+      LoggingConfig:
+        LogGroup: !Ref ExplainLogGroup
+      Environment:
+        Variables:
+          API_KEY_PARAMETER: !Ref AnthropicApiKeyParameterName
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AnthropicApiKeyParameterName}
+      FunctionUrlConfig:
+        AuthType: AWS_IAM
+        InvokeMode: BUFFERED
+
+Outputs:
+  FunctionUrl:
+    Description: The private Function URL. Requests must be signed with SigV4 for the lambda service.
+    Value: !GetAtt ExplainFunctionUrl.FunctionUrl
+  FunctionName:
+    Value: !Ref ExplainFunction
+  LogGroupName:
+    Value: !Ref ExplainLogGroup

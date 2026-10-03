@@ -2,7 +2,7 @@
   "name": "lab-cdt-ladder-api",
   "private": true,
   "version": "0.1.0",
-  "description": "Explica mi escalera: one endpoint that explains a CDT ladder in plain Spanish. Session 2A: validation pipeline and explanation view, no model.",
+  "description": "Explica mi escalera: one endpoint that explains a CDT ladder in plain Spanish. Session 2B: the validation pipeline and explanation view behind a private, buffered Lambda Function URL that calls the model.",
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -14,10 +14,13 @@
     "verify:vendor": "bash scripts/verify-vendor.sh"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "0.131.0",
+    "@aws-sdk/client-ssm": "3.1144.0",
     "ajv": "8.20.0"
   },
   "devDependencies": {
     "@types/node": "22.20.4",
+    "esbuild": "0.28.2",
     "typescript": "7.0.2",
     "vitest": "4.1.11"
   }
