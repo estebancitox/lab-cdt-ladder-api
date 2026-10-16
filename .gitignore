@@ -13,6 +13,7 @@ node_modules/
 dist/
 build/
 .aws-sam/
+.eval/
 samconfig.toml
 
 # OS and editor noise

@@ -11,7 +11,10 @@
     "test": "vitest run",
     "test:ci": "TZ=America/Bogota vitest run && TZ=UTC vitest run",
     "typecheck": "tsc --noEmit",
-    "verify:vendor": "bash scripts/verify-vendor.sh"
+    "verify:vendor": "bash scripts/verify-vendor.sh",
+    "eval:build": "esbuild src/eval/live.ts src/eval/replay.ts --bundle --platform=node --format=cjs --target=node22 --outdir=.eval --out-extension:.js=.cjs --log-level=warning",
+    "eval:live": "npm run -s eval:build && node .eval/live.cjs",
+    "eval:replay": "npm run -s eval:build && node .eval/replay.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.131.0",
