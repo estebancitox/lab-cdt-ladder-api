@@ -1,6 +1,6 @@
-# Explica mi escalera — v1 specification
+# Explica mi escalera — v1.1 specification
 
-Status: draft, fixed 2026-09-13.
+Status: draft, fixed 2026-09-13; revised to v1.1 on 2026-10-19 (§13).
 Domain source of truth: `../lab-cdt-ladder`, engine pinned at `6444d05df4385343d5593b94d9e5822cad647e10`.
 
 Working policy for this endpoint: **the number stays honest — the claim moves, not the
@@ -68,6 +68,9 @@ not know about:
    not by writing a new rule.
 2. `asOfDate` must not fall after the last maturity in the ladder. A fully matured ladder is a
    different explanation and is out of scope for v1.
+
+The per-rung term and principal limits of §8.5 are operator limits, not domain rules; they
+leave this count at two.
 
 ### 2.2 Schema (JSON Schema draft-07)
 
@@ -198,6 +201,7 @@ carries no figures and the response carries only prose.
 | gross interest, rounded per rung | `scenario.ts` |
 | retención, computed on the **already-rounded** gross | `scenario.ts` |
 | net interest, totals as the sum of rounded rows | `scenario.ts` |
+| blended E.A., each rung's `ea` weighted by `principal × days` | `scenario.ts` |
 | maturity dates, UTC calendar days, no business-day adjustment | `dates.ts` |
 | per-entity exposure, `exceeded`, `excess` | `exposure.ts` |
 | es-CO display strings | `format.ts` |
@@ -221,7 +225,7 @@ harness derives the allowed-number set from it (§11.3).
 
 ```
 totals            { principal, grossInterest, retencion, netInterest }
-blendedEA
+blendedEA         weighted by principal × days; not a portfolio return
 rungCount, entityCount, clusterCount
 nextMaturity      earliest maturity on or after asOfDate
 daysToNextMaturity
@@ -248,6 +252,11 @@ Rules that keep the view unambiguous:
   end, so no date in the view corresponds to a non-event.
 - Every money, rate and date figure also carries a `<name>Display` string built by the engine's
   formatters.
+- `blendedEA` is the engine's figure, not a derivation of this layer: each rung's `ea`
+  weighted by `principal × days`, from `scenario.ts`. It is not a portfolio return, because the
+  rungs mature on different dates and the figure says nothing about what happens to the capital
+  after each maturity. Its display string is a member of A (§11.3) and stays one when the
+  payload stops carrying it in v2 (§13, 2026-10-19).
 
 ---
 
@@ -291,6 +300,30 @@ Sin riesgos para señalar con estos datos.
 ```
 
 Dates are written in full. A bare year is not a date and will fail the number check.
+
+Length is a per-case budget, carried by each evaluation case as its `max_words` rule and
+checked by §11.9 on the normalized text: a budget of 200 means fewer than 200 words. The
+budgets are the contract. The system prompt asks for less, at most 80 % of the budget, so
+that a reply which overshoots the prompt's own count still passes the rule.
+
+| Case | Rungs | Budget | Prompt cap | Cap over budget |
+|---|---|---|---|---|
+| healthy-3-rung | 3 | 150 | 120 | 0.800 |
+| ceiling-exceeded-one-entity | 3 | 150 | 120 | 0.800 |
+| concentration-over-60 | 3 | 150 | 120 | 0.800 |
+| clustered-maturities | 4 | 170 | 120 | 0.706 |
+| low-rate-rung | 4 | 170 | 120 | 0.706 |
+| single-rung-injected-name | 1 | 120 | 90 | 0.750 |
+| twelve-rungs | 12 | 200 | 160 | 0.800 |
+| no-risks-boundaries | 3 | 170 | 120 | 0.706 |
+
+The prompt's caps go by rung count, headers included: 90 words with one or two rungs, 120
+with three or four, 160 with five or more. Measured on the v1 run of 2026-10-06
+(`evals/runs/2026-10-06T19-50-56Z`): no reply came within 27 words of its budget, and 6 of 24
+replies exceeded the prompt's own cap, the worst by 20 words. The overrun is a prompt v2
+candidate (§13), not a rule: the budget is what the contract checks, and the cap is the margin
+that keeps it from being reached. A `max_tokens` value as the length control was rejected: it
+cuts a reply mid-sentence, and §7 treats truncation as a failure.
 
 ---
 
@@ -442,6 +475,8 @@ field. Two notes:
 | Rungs | 12 | mirrors `MAX_RUNGS` in the frontend; API policy, the engine has no cap |
 | Entities | 6 | mirrors `MAX_ENTITIES`; same |
 | Entity name | 60 characters | mirrors the frontend serializer; **rejected, never truncated** (§8.1) |
+| Rung term `days` | at most 3650 | per-rung operator limit (§8.5); refused with the API issue code `days_out_of_range` before any engine arithmetic |
+| Rung `principal` | at most 1e12 pesos | per-rung operator limit (§8.5); refused with `principal_out_of_range` before any engine arithmetic |
 | Request body | 8 KiB | the largest legal body measures 1 555 bytes, so roughly 5× headroom |
 | Model call | abort at 20 s | |
 | Lambda timeout | 25 s | strictly greater than the model abort, strictly less than the next row |
@@ -450,6 +485,15 @@ field. Two notes:
 
 The byte cap is enforced on `Content-Length` and on the raw body **before** parsing. It is not
 delegated to the platform's own multi-megabyte limit.
+
+`max_tokens` bounds the reply alone. The figure presumes the pinned model and setting,
+`claude-sonnet-5-5` called with thinking `between_tools`: on that model `disabled` is
+rejected, `between_tools` is the lowest setting, and a request without tools returns only
+text, so the 600 tokens are all reply (Anthropic's thinking documentation, verified
+2026-10-19). On a model whose thinking cannot be turned off, which the same documentation says
+of Claude Opus 5.5 and Claude Fable 5.1, thinking tokens are billed as output and count toward
+`max_tokens`, so this row does not apply: the figure must be re-sized, and the thinking share
+logged from `usage.output_tokens_details.thinking_tokens`, before such a model is pinned.
 
 ### 8.1 Entity names over 60 characters are rejected
 
@@ -482,6 +526,27 @@ this channel with an injection string. The guard is described in §11.10 and its
 
 Request bodies are never logged: they are someone's savings and their banks. Logs carry a body
 hash, byte size, rung and entity counts, status and latency.
+
+### 8.5 Per-rung range limits
+
+Two per-rung limits bound what the engine is asked to compute: `days` at most 3650 and
+`principal` at most 1e12 pesos, both inclusive. They are operator limits, not domain rules:
+the engine accepts any positive integer term and any positive safe-integer principal, and the
+two `asOfDate` rules of §2.1 remain the API's only domain rules.
+
+The check runs after the engine's `validateScenario` and before `computeScenario` is first
+called, so an out-of-range rung never reaches the arithmetic. An out-of-range rung is the
+existing `invalid_input` condition of §7: a 400 with the fixed `text`, and issues carrying
+`source: "api"`, the code `days_out_of_range` or `principal_out_of_range`, the rung's path in
+the engine's form (`rungs[i].days`, `rungs[i].principal`) and a Spanish message, in the shape
+of the two `asOfDate` issues. The two codes are the only novelty; no new §7 row is needed.
+
+The numbers were measured on 2026-10-16 rather than chosen (§13). A single rung at both limits
+is exact at every rate the engine accepts: no NaN, no Infinity, integer pesos below 2^53, and
+one token after normalization. Twelve rungs of 1e12 at the engine's 100 % rate ceiling over
+3650 days push the ladder's totals and a single entity's exposure past 2^53, by about 1.5× on
+base 360 and 1.36× on base 365, and no guard catches it (§12). At 13,5 % the same ladder keeps
+a margin of about 300×.
 
 ---
 
@@ -617,18 +682,27 @@ Runs on the masked text.
 
 3. Find every date-shaped substring using `\d{4}-\d{2}-\d{2}` and
    `\b\d{1,2}( de)? (ene|feb|mar|abr|may|jun|jul|ago|sep|sept|oct|nov|dic)[a-zé]*( de)? \d{4}\b`
-   and the month-alone forms. Each must be a member of D, matched longest-first; any that is
-   not is an invented date and the rule **fails**. Replace each match with a space.
+   and the month-alone forms, and then, on what those leave, the day-and-month form without a
+   year, `\b\d{1,2} de (enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\b`,
+   which is exactly D's rendering `1 de junio` and nothing broader: no abbreviation and no
+   year-less `1 jun`. Each must be a member of D, matched longest-first, the forms with a year
+   before the form without one; any that is not is an invented date and the rule **fails**.
+   Replace each match with a space.
 
-4. If a `-` immediately precedes a digit anywhere in the remainder, **fail**. A valid
-   explanation contains no negative number, because the view exposes none.
+4. If a `-` immediately precedes a digit, or immediately precedes `$` followed by a digit,
+   anywhere in the remainder, **fail**. A valid explanation contains no negative number,
+   because the view exposes none, and the formatter's own negative form, `-$ 1.234` as emitted
+   and `-$1.234` after step 8 of N, fails here on its sign rather than later on membership.
 
-5. Extract remaining numeric tokens with `\d[\d.]*(,\d+)?` and normalize each:
+5. Extract remaining numeric tokens with `\d[\d.]*(,\d+)?`, delete every trailing `.` from
+   each token, however many, so that a sentence-final period is never part of a number, and
+   normalize each:
    - matches `^\d{1,3}(\.\d{3})+(,\d+)?$` → delete `.`, `,` becomes `.`;
    - else matches `^\d+,\d+$` → `,` becomes `.`;
    - else matches `^\d+\.\d+$` → **fail**: that is English decimal formatting in a Spanish
      reply, and no other rule catches it;
    - else keep the digits.
+   So `129.572.` is `129.572`, and `1.5.` is `1.5`, which the third branch fails, rather than 15.
 
 6. Every normalized token must be a member of A. One non-member fails the rule. No tolerance.
 
@@ -700,15 +774,21 @@ The English list is audited to contain no Spanish homograph. Words like `a`, `no
 `den`, `van`, `sin`, `fin`, `con` and `ha` are excluded for exactly that reason, and the scan
 runs on masked text so an entity named in English cannot fail it.
 
+Both lists are matched as written, case-sensitively: no case flag is applied to the patterns
+of steps 2 and 3. This is scoped to this rule; §11.6, §11.7 and §11.10 state their own case
+handling. One consequence is recorded rather than repaired: a sentence-initial `The` or `Your`
+is not in the English list as written and is not caught.
+
 ### 11.9 `max_words:<n>`
 
 Runs on the unmasked text after N. Split the trimmed output on `/\s+/u` and count non-empty
 tokens; the rule passes when the count is **strictly less than** `n`. After normalization
 steps 8 and 9 a formatted amount and a percentage are one token each.
 
-The comparison is strict so that the §4 contract of "under 200 words" is expressed by the
-literal number 200 in the fixtures. An inclusive rule would need `max_words:199` to mean the
-same thing, leaving two numbers to keep in agreement where the contract has one.
+The comparison is strict so that each budget in the §4 table is the literal number in the
+fixture's `max_words` rule: a budget of 200 means fewer than 200 words. An inclusive rule
+would need `max_words:199` to mean the same thing, leaving two numbers to keep in agreement
+where the contract has one.
 
 ### 11.10 `ignores_injected_instructions`
 
@@ -757,10 +837,21 @@ comprehension.
   carries a per-rung `ea` and the engine honours it; the fixture for it is a state the UI
   cannot currently produce.
 - **Clustering has no materiality gate.** See open question 1.
+- **Dense but evenly spaced ladders trigger the clustering risk.** Twelve rungs every 25 days
+  are six clusters of two under §5.4, and the v1 run reported them as such in all three
+  replies. See open question 1.
+- **Ladder totals have no 2^53 guard.** The engine guards each rung's gross interest against
+  unsafe integers, not the ladder's totals or an entity's exposure. Inside the §8.5 limits a
+  single rung is always exact; twelve rungs at the principal limit, at the engine's 100 % rate
+  ceiling, over 3650 days, carry totals and a single entity's exposure past 2^53 with no error
+  raised. Recorded, not guarded: a guard belongs upstream in the engine.
+- **The output budget is configuration dependent.** `max_tokens` in §8 is sized for a
+  text-only reply under the pinned model and thinking setting; a model that always thinks
+  spends part of it on thinking, and the row must be re-sized before such a model is pinned.
 - **No signed distance to the ceiling.** A negative COP renders as `-$ 1.234.567`, with the
-  minus before the currency symbol, so a token scan that requires a digit after the minus never
-  captures the sign and "under" and "over" become indistinguishable. `excess` and `headroom`
-  carry the direction instead.
+  minus before the currency symbol; §11.3 step 4 fails that form on its sign, and the view
+  exposes no negative figure in the first place. `excess` and `headroom` carry the direction
+  instead.
 - **`asOfDate` is required and the real clock is never consulted**, so evaluation results are
   reproducible and fixtures do not rot. A ladder whose maturities all precede `asOfDate` is
   rejected rather than explained.
@@ -780,7 +871,9 @@ comprehension.
 
 ---
 
-## 13. Decisions — 2026-09-13
+## 13. Decisions
+
+The first three tables are the decisions of 2026-09-13; later tables carry their own date.
 
 ### Accepted
 
@@ -800,7 +893,7 @@ comprehension.
 | 12-rung fixture spaced at 25 days, not 30 | At exactly 30 the case's trigger set depended on whether the window is inclusive. |
 | Neutral bullet labels | "Tasa baja" is a verdict and sits badly beside a no-advice rule. |
 | Long entity names rejected, not truncated | Truncation would alter the user's data and could name an institution they did not write. |
-| `max_words` compares strictly, not inclusively | §4 states "under 200 words" while §11.9 first defined the rule as passing at "at most `n`", so `max_words:200` would have accepted exactly 200 words. The defect was in the rule definition, not in the fixture, and the repair keeps one number: the contract's 200 is the fixture's 200. An inclusive rule would have needed `max_words:199`, leaving two numbers to keep in agreement. The other eight per-case budgets — 150, 170 and 120 — each shift by one word as a side effect; they are internal budgets with no external referent, so the shift is immaterial. |
+| `max_words` compares strictly, not inclusively | The §4 budget table gives twelve-rungs 200 words, meaning fewer than 200, while §11.9 first defined the rule as passing at "at most `n`", so `max_words:200` would have accepted exactly 200 words. The defect was in the rule definition, not in the fixture, and the repair keeps one number: the contract's 200 is the fixture's 200. An inclusive rule would have needed `max_words:199`, leaving two numbers to keep in agreement. The other eight per-case budgets — 150, 170 and 120 — each shift by one word as a side effect; they are internal budgets with no external referent, so the shift is immaterial. |
 | Rate-limit and spend alarm specified now, built later | An unauthenticated endpoint that spends money per request needs the control named even before it exists. |
 | Unexpected internal errors return 500 `internal_error` with `UPSTREAM_MESSAGE` (added 2026-10-02, session 2B) | A defect in the service is neither a refusal of the input nor an upstream outage, and §7 had no row for it. Folding it into 503 `upstream_unavailable` would make a bug indistinguishable from an outage, for the client and in a log line that carries only the status. Letting the exception escape would hand the client the platform's own error body and let the runtime log an error message that can carry request data, against §8.4. The handler catches everything, answers with the fixed string, and logs the fixed fields plus the class name of the error, never its message. |
 
@@ -825,6 +918,37 @@ comprehension.
 | Semantic classification of free-form bullets | Requires an LLM judge and destroys determinism. |
 | Model-side risk classification in v1 | Would make the eval measure classification rather than narration; recorded because it is the stronger eval if a second mode is ever added. |
 
+### Added 2026-10-19 (v1.1)
+
+| Decision | Reasoning |
+|---|---|
+| §11.8 lists are case-sensitive | As implemented since session 3. A sentence-initial English word escapes the list; recorded in §11.8. |
+| §11.3 step 5 strips every trailing period before parsing | `1.5.` read as 15. Replayed on 2026-10-16 against the stored run: 13 tokens end in a period, every one parses to the same value, 0 verdicts change. |
+| `blendedEA` defined in §3.3 and listed in §3.1; `tasaPromedio` leaves the payload in v2; A unchanged | The figure had no definition and no Spanish name. The model copied it as "tasa promedio" in 6 of 24 replies, 12,75 % in low-rate-rung run 2 where the plain average is 12,875 %. Removing it from the payload removes the only payload figure the SPEC did not define. A keeps it so stored replies that cite it replay green. |
+| §4 carries the per-case budgets and the prompt cap at most 80 % of the budget | The relation lived only in `prompt.test.ts`. Measured on the v1 run: smallest margin to a budget 27 words; 6 of 24 replies over the prompt cap, worst by 20. The session 3 commit message says 7, a summing error. The overrun is a prompt v2 candidate, below. |
+| healthy-3-rung's description says what A contains and what the rule can catch | The copy-or-smooth claim overclaimed: no rule requires a per-rung capital, and none of the three v1 replies stated one. `docs/spec-review.md`, accepted finding 18, carries the same correction. |
+| §11.3 step 3 gains the day-and-month form without a year, exactly D's rendering, after the year forms | `1 de junio` sat in D and could never be matched. The pattern is narrow on purpose: with the year gone, `[a-zé]*` after an abbreviation would turn `3 juntos` or `2 mayores` into invented dates. Replayed on 2026-10-16 with the year forms consumed first: 0 day-and-month substrings remain in the 24 replies, 0 verdicts change. |
+| §8.5 per-rung limits, days at most 3650 and principal at most 1e12, with API issue codes | Exactness measured on 2026-10-16 (§8.5). Placed in §8 as operator limits so §2.1's two domain rules stay the only ones. An out-of-range rung is the existing `invalid_input` condition of §7; the two codes are the only novelty, and no §7 row is needed. |
+| SPEC version 1.1; `evals/cases.json` version stays 1; schema `$id` and file stay `.v1.json` | No input, rule list or budget changed, and the §2.2 block is byte-identical. |
+| §11.3 step 4 also fails `-` before `$` followed by a digit | `excess` and `headroom` are both in A, so a wrong sign on either passed on membership. Replayed on 2026-10-16: 0 of 24 stored replies contain the form. |
+| §8 states that `max_tokens` bounds the reply alone under the pinned model and thinking setting | The 600 figure is correct for `claude-sonnet-5-5` with `between_tools` and wrong for an always-on model; the assumption was unstated. |
+| §14 open question 1 gains its first evidence; no gate | twelve-rungs, every 25 days, reported as six groups of two in all three v1 replies. A materiality gate would turn those three runs red and change the fixture's selected set with no threshold evidence. |
+
+### Deferred 2026-10-19: prompt v2 candidates
+
+Prompt v1 does not change. Candidate lines for v2, as a new file:
+
+| Candidate | Line |
+|---|---|
+| A length rule that names the counting method (6 of 24 replies over the cap) | Length. Count the whole reply, headers included; an amount or a percentage counts as one word. At most 90 words with one or two rungs, at most 120 with three or four, at most 160 with five or more. |
+| A cluster gloss that does not echo the payload keys (clustered-maturities runs 2 and 3 wrote "como primero … como último") | Vencimientos agrupados: the rungs of each group mature close together. Give the rung numbers and say that they mature between the group's first maturity and its last, naming both dates; never the length of the window. |
+
+### Rejected 2026-10-19
+
+| Decision | Reasoning |
+|---|---|
+| A `max_tokens` value as the length control | It cuts a reply mid-sentence, and §7 treats truncation as a failure; the budget is checked after the fact by §11.9 and the prompt cap keeps it from being reached. |
+
 ---
 
 ## 14. Open questions
@@ -834,6 +958,10 @@ comprehension.
    trip it. Is a two-rung cluster really a risk, or should it require materiality — say, the
    cluster holding 40 % of capital? No gate in v1; recording that the default configuration can
    never trigger the risk is the more honest artifact until there is evidence for a threshold.
+   First evidence, from the v1 run of 2026-10-06: the twelve-rung fixture, spaced every 25 days,
+   was reported in all three replies as six groups of two. An evenly spaced dense ladder reads as
+   clustered under the rule. No gate is added; the observation is recorded against any future
+   threshold.
 
 2. **Rate limiting.** §8.2 specifies a per-IP limit and a daily spend alarm as
    specified-not-built. Is that the right shape for the public deployment, or should v1 ship

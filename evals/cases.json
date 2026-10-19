@@ -4,7 +4,7 @@
   "cases": [
     {
       "id": "healthy-3-rung",
-      "description": "Ordinary healthy ladder: 50.000.000 split three ways at 90/180/270 days, one rate, one entity per rung, nothing triggered. Uses dayCountBase 365 so an implementation that hardcodes 360 cannot pass the suite. The split leaves one peso less on the third rung, which tests whether the model copies 16.666.666 or smooths it.",
+      "description": "Ordinary healthy ladder: 50.000.000 split three ways at 90/180/270 days, one rate, one entity per rung, nothing triggered. Uses dayCountBase 365 so an implementation that hardcodes 360 cannot pass the suite. The split is the engine's own splitCapital result, so the allowed set A holds the per-rung principal displays 16.666.667, 16.666.667 and 16.666.666 beside the totals, the rate, the interest figures and the three maturity dates. numbers_subset_of_input fails a rounded figure such as 16,7 millones; it cannot fail the omission of a per-rung capital, which no rule requires.",
       "input": {
         "asOfDate": "2027-01-04",
         "ladder": {

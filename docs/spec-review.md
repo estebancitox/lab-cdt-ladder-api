@@ -1,6 +1,8 @@
 # Adversarial review of the v1 specification
 
 Date: 2026-09-13. Reviewed artifact: `SPEC.md` and the design behind `evals/cases.json`.
+Revised 2026-10-19 with SPEC v1.1: the case 1 bullet under accepted finding 18 carries a
+correction; nothing else in this record changed.
 
 This is the record the Decisions section of `SPEC.md` points at. Its purpose is that a
 deferred or rejected finding can be re-read with its reasoning intact rather than
@@ -248,8 +250,12 @@ Both accepted, both verified:
   share fixture already exceeds at 120.000.000. The accepted design puts one entity 69.493 over
   and another 16.000 under, exercising both sides of the strict comparison in one fixture.
 - Case 1 should use the engine's own `splitCapital(50.000.000, 3)` result — `16.666.667`,
-  `16.666.667`, `16.666.666` — rather than three equal rungs. The odd peso is a real test of
-  whether the model copies the figure or rounds it to "unos 16,7 millones". Accepted.
+  `16.666.667`, `16.666.666` — rather than three equal rungs. Accepted. The bullet first called
+  the odd peso a test of whether the model copies the figure or rounds it to "unos 16,7
+  millones"; revised 2026-10-19 with SPEC v1.1, because that overclaims:
+  `numbers_subset_of_input` fails a rounded figure, but no rule requires a per-rung capital at
+  all, so an omitted figure passes, and none of the three v1 replies for this case states one.
+  The case description now says what A contains and what the rule can and cannot catch.
 - No case used `dayCountBase: 365`, so an implementation hardcoding 360 would have passed the
   whole suite. Case 1 and case 5 now use 365. Accepted.
 - Case 10's four boundaries are not independent: an entity at exactly 60 % necessarily holds
