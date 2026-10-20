@@ -255,8 +255,8 @@ Rules that keep the view unambiguous:
 - `blendedEA` is the engine's figure, not a derivation of this layer: each rung's `ea`
   weighted by `principal × days`, from `scenario.ts`. It is not a portfolio return, because the
   rungs mature on different dates and the figure says nothing about what happens to the capital
-  after each maturity. Its display string is a member of A (§11.3) and stays one when the
-  payload stops carrying it in v2 (§13, 2026-10-19).
+  after each maturity. Its display string is a member of A (§11.3) and stays one after
+  `tasaPromedio` is dropped in the payload and prompt v2 (§13, 2026-10-19).
 
 ---
 
@@ -319,8 +319,8 @@ that a reply which overshoots the prompt's own count still passes the rule.
 
 The prompt's caps go by rung count, headers included: 90 words with one or two rungs, 120
 with three or four, 160 with five or more. Measured on the v1 run of 2026-10-06
-(`evals/runs/2026-10-06T19-50-56Z`): no reply came within 27 words of its budget, and 6 of 24
-replies exceeded the prompt's own cap, the worst by 20 words. The overrun is a prompt v2
+(`evals/runs/2026-10-06T19-50-56Z`): no reply came closer than 27 words to its budget, and 6 of
+24 replies exceeded the prompt's own cap, the worst by 20 words. The overrun is a prompt v2
 candidate (§13), not a rule: the budget is what the contract checks, and the cap is the margin
 that keeps it from being reached. A `max_tokens` value as the length control was rejected: it
 cuts a reply mid-sentence, and §7 treats truncation as a failure.
@@ -466,6 +466,19 @@ field. Two notes:
 - The fix belongs upstream in `validate.ts` as a distinct `field_missing` code. Introducing an
   API-specific code here would reintroduce the second source of truth through the back door.
 
+### 7.3 API issues
+
+The API's own rules produce a third issue source. An API issue is `{ source: "api", code,
+path, message }`: `source` is the string `api`, `code` names the rule, `path` is the offending
+field, and `message` is a Spanish sentence for the client. The code has emitted three instances
+since session 2. Two are the `asOfDate` rules of §2.1, `as_of_date_invalid` and
+`as_of_date_after_last_maturity`, both at path `asOfDate`, under the `asOfDate` row of the table
+above with `error.code` `invalid_input`. The third is `invalid_json`, for a body that is not
+JSON, at the empty path `""` with the message "El cuerpo de la solicitud no es JSON válido.",
+also a 400 `invalid_input`; the table above has no row for it, and that row joins the §8.5 range
+row in 4B together with the test that pins the table's rows (`src/handler.test.ts:181-204`).
+The per-rung range codes of §8.5 use this shape.
+
 ---
 
 ## 8. Operational limits
@@ -477,7 +490,7 @@ field. Two notes:
 | Entity name | 60 characters | mirrors the frontend serializer; **rejected, never truncated** (§8.1) |
 | Rung term `days` | at most 3650 | per-rung operator limit (§8.5); refused with the API issue code `days_out_of_range` before any engine arithmetic |
 | Rung `principal` | at most 1e12 pesos | per-rung operator limit (§8.5); refused with `principal_out_of_range` before any engine arithmetic |
-| Request body | 8 KiB | the largest legal body measures 1 555 bytes, so roughly 5× headroom |
+| Request body | 8 KiB | the largest legal body measured 1 555 bytes with twelve-digit principals, before §8.5 admitted thirteen; re-measured in 4B (§12); roughly 5× headroom |
 | Model call | abort at 20 s | |
 | Lambda timeout | 25 s | strictly greater than the model abort, strictly less than the next row |
 | API Gateway integration | 29 s hard cap | applies only if fronted by API Gateway REST |
@@ -490,7 +503,7 @@ delegated to the platform's own multi-megabyte limit.
 `claude-sonnet-5-5` called with thinking `between_tools`: on that model `disabled` is
 rejected, `between_tools` is the lowest setting, and a request without tools returns only
 text, so the 600 tokens are all reply (Anthropic's thinking documentation, verified
-2026-10-19). On a model whose thinking cannot be turned off, which the same documentation says
+2026-10-18). On a model whose thinking cannot be turned off, which the same documentation says
 of Claude Opus 5.5 and Claude Fable 5.1, thinking tokens are billed as output and count toward
 `max_tokens`, so this row does not apply: the figure must be re-sized, and the thinking share
 logged from `usage.output_tokens_details.thinking_tokens`, before such a model is pinned.
@@ -534,19 +547,28 @@ Two per-rung limits bound what the engine is asked to compute: `days` at most 36
 the engine accepts any positive integer term and any positive safe-integer principal, and the
 two `asOfDate` rules of §2.1 remain the API's only domain rules.
 
-The check runs after the engine's `validateScenario` and before `computeScenario` is first
-called, so an out-of-range rung never reaches the arithmetic. An out-of-range rung is the
-existing `invalid_input` condition of §7: a 400 with the fixed `text`, and issues carrying
-`source: "api"`, the code `days_out_of_range` or `principal_out_of_range`, the rung's path in
-the engine's form (`rungs[i].days`, `rungs[i].principal`) and a Spanish message, in the shape
-of the two `asOfDate` issues. The two codes are the only novelty; no new §7 row is needed.
+The check is a stage of the §7 pipeline, between the engine stage and the `asOfDate` stage. It
+runs only when the engine's `validateScenario` returned no issues, and it precedes the whole
+`asOfDate` stage, both of its rules, not only the rule that first calls `computeScenario`: a
+stage does not sit between two rules of another stage. So an out-of-range rung never reaches the
+arithmetic, and, like every stage, when this one finds issues it ends the request and no later
+stage runs. It reports one issue per offending field of every offending rung, so a rung over
+both limits yields two issues, as the schema stage lists every violation rather than the first.
+An out-of-range rung is the existing `invalid_input` condition of §7: a 400 with the fixed
+`text`, and issues in the API issue shape of §7.3, `source: "api"`, the code
+`days_out_of_range` or `principal_out_of_range`, the rung's path in the engine's form
+(`rungs[i].days`, `rungs[i].principal`) and a Spanish message. The message text is fixed in 4B
+alongside the code, as the `asOfDate` messages were. The two codes are new, and so is a §7 row:
+the table gains its range row in 4B, together with the test that pins the table's rows
+(`src/handler.test.ts:181-204`).
 
 The numbers were measured on 2026-10-16 rather than chosen (§13). A single rung at both limits
 is exact at every rate the engine accepts: no NaN, no Infinity, integer pesos below 2^53, and
 one token after normalization. Twelve rungs of 1e12 at the engine's 100 % rate ceiling over
 3650 days push the ladder's totals and a single entity's exposure past 2^53, by about 1.5× on
 base 360 and 1.36× on base 365, and no guard catches it (§12). At 13,5 % the same ladder keeps
-a margin of about 300×.
+a margin of about 288× on base 360 and 295× on base 365 on the ladder's gross total, and about
+208× and 212× on the single entity's exposure.
 
 ---
 
@@ -680,7 +702,9 @@ Runs on the masked text.
    accent-folded. D is generated per date, not matched by pattern, because a pattern family
    accepts renderings of dates that do not exist.
 
-3. Find every date-shaped substring using `\d{4}-\d{2}-\d{2}` and
+3. Scan the lowercased, accent-folded copy of the masked text, the form D is built in, so
+   that the day-and-month form below is read against the same folding as every other form.
+   Find every date-shaped substring using `\d{4}-\d{2}-\d{2}` and
    `\b\d{1,2}( de)? (ene|feb|mar|abr|may|jun|jul|ago|sep|sept|oct|nov|dic)[a-zé]*( de)? \d{4}\b`
    and the month-alone forms, and then, on what those leave, the day-and-month form without a
    year, `\b\d{1,2} de (enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\b`,
@@ -689,10 +713,12 @@ Runs on the masked text.
    before the form without one; any that is not is an invented date and the rule **fails**.
    Replace each match with a space.
 
-4. If a `-` immediately precedes a digit, or immediately precedes `$` followed by a digit,
+4. If a `-` immediately precedes a digit, or immediately precedes a `$` that a digit
+   immediately follows, the three characters adjacent as in `-$1` with nothing between them,
    anywhere in the remainder, **fail**. A valid explanation contains no negative number,
-   because the view exposes none, and the formatter's own negative form, `-$ 1.234` as emitted
-   and `-$1.234` after step 8 of N, fails here on its sign rather than later on membership.
+   because the view exposes none, and the formatter's own negative form, emitted as `-$ 1.234`
+   and already `-$1.234` by step 8 of N when this rule runs, fails here on its sign rather than
+   later on membership.
 
 5. Extract remaining numeric tokens with `\d[\d.]*(,\d+)?`, delete every trailing `.` from
    each token, however many, so that a sentence-final period is never part of a number, and
@@ -845,6 +871,11 @@ comprehension.
   single rung is always exact; twelve rungs at the principal limit, at the engine's 100 % rate
   ceiling, over 3650 days, carry totals and a single entity's exposure past 2^53 with no error
   raised. Recorded, not guarded: a guard belongs upstream in the engine.
+- **The §8 body-size figure predates §8.5.** The 1 555 bytes of the largest legal body were
+  measured for the v1 review of 2026-09-13 with twelve-digit principals, and the independent
+  review of 2026-10-19 measured 1 558 bytes for the same body with a compact serialization.
+  §8.5 admits thirteen-digit principals, at most one more byte per rung. The figure is
+  re-measured in 4B; the 8 KiB cap does not move.
 - **The output budget is configuration dependent.** `max_tokens` in §8 is sized for a
   text-only reply under the pinned model and thinking setting; a model that always thinks
   spends part of it on thinking, and the row must be re-sized before such a model is pinned.
@@ -893,7 +924,7 @@ The first three tables are the decisions of 2026-09-13; later tables carry their
 | 12-rung fixture spaced at 25 days, not 30 | At exactly 30 the case's trigger set depended on whether the window is inclusive. |
 | Neutral bullet labels | "Tasa baja" is a verdict and sits badly beside a no-advice rule. |
 | Long entity names rejected, not truncated | Truncation would alter the user's data and could name an institution they did not write. |
-| `max_words` compares strictly, not inclusively | The §4 budget table gives twelve-rungs 200 words, meaning fewer than 200, while §11.9 first defined the rule as passing at "at most `n`", so `max_words:200` would have accepted exactly 200 words. The defect was in the rule definition, not in the fixture, and the repair keeps one number: the contract's 200 is the fixture's 200. An inclusive rule would have needed `max_words:199`, leaving two numbers to keep in agreement. The other eight per-case budgets — 150, 170 and 120 — each shift by one word as a side effect; they are internal budgets with no external referent, so the shift is immaterial. |
+| `max_words` compares strictly, not inclusively (reasoning revised 2026-10-19: it cites the §4 budget table, added that day where the row had quoted "under 200 words", and counts seven other budgets, not eight) | The §4 budget table gives twelve-rungs 200 words, meaning fewer than 200, while §11.9 first defined the rule as passing at "at most `n`", so `max_words:200` would have accepted exactly 200 words. The defect was in the rule definition, not in the fixture, and the repair keeps one number: the contract's 200 is the fixture's 200. An inclusive rule would have needed `max_words:199`, leaving two numbers to keep in agreement. The other seven per-case budgets — 150, 170 and 120 — each shift by one word as a side effect; they are internal budgets with no external referent, so the shift is immaterial. |
 | Rate-limit and spend alarm specified now, built later | An unauthenticated endpoint that spends money per request needs the control named even before it exists. |
 | Unexpected internal errors return 500 `internal_error` with `UPSTREAM_MESSAGE` (added 2026-10-02, session 2B) | A defect in the service is neither a refusal of the input nor an upstream outage, and §7 had no row for it. Folding it into 503 `upstream_unavailable` would make a bug indistinguishable from an outage, for the client and in a log line that carries only the status. Letting the exception escape would hand the client the platform's own error body and let the runtime log an error message that can carry request data, against §8.4. The handler catches everything, answers with the fixed string, and logs the fixed fields plus the class name of the error, never its message. |
 
@@ -923,12 +954,12 @@ The first three tables are the decisions of 2026-09-13; later tables carry their
 | Decision | Reasoning |
 |---|---|
 | §11.8 lists are case-sensitive | As implemented since session 3. A sentence-initial English word escapes the list; recorded in §11.8. |
-| §11.3 step 5 strips every trailing period before parsing | `1.5.` read as 15. Replayed on 2026-10-16 against the stored run: 13 tokens end in a period, every one parses to the same value, 0 verdicts change. |
-| `blendedEA` defined in §3.3 and listed in §3.1; `tasaPromedio` leaves the payload in v2; A unchanged | The figure had no definition and no Spanish name. The model copied it as "tasa promedio" in 6 of 24 replies, 12,75 % in low-rate-rung run 2 where the plain average is 12,875 %. Removing it from the payload removes the only payload figure the SPEC did not define. A keeps it so stored replies that cite it replay green. |
+| §11.3 step 5 strips every trailing period before parsing | `1.5.` read as 15. Replayed on 2026-10-16 against the stored run: 20 trailing-period occurrences in 17 replies, 13 distinct token strings, all 20 parsing equal under the old and the new step 5, 0 verdicts change. |
+| `blendedEA` defined in §3.3 and listed in §3.1; `tasaPromedio` is dropped in the payload and prompt v2; A unchanged | The figure had no definition and no Spanish name. The model copied it as "tasa promedio" in 6 of 24 replies, 12,75 % in low-rate-rung run 2 where the plain average is 12,875 %. Removing it from the payload removes the only payload figure the SPEC did not define. A keeps it so stored replies that cite it replay green. |
 | §4 carries the per-case budgets and the prompt cap at most 80 % of the budget | The relation lived only in `prompt.test.ts`. Measured on the v1 run: smallest margin to a budget 27 words; 6 of 24 replies over the prompt cap, worst by 20. The session 3 commit message says 7, a summing error. The overrun is a prompt v2 candidate, below. |
 | healthy-3-rung's description says what A contains and what the rule can catch | The copy-or-smooth claim overclaimed: no rule requires a per-rung capital, and none of the three v1 replies stated one. `docs/spec-review.md`, accepted finding 18, carries the same correction. |
 | §11.3 step 3 gains the day-and-month form without a year, exactly D's rendering, after the year forms | `1 de junio` sat in D and could never be matched. The pattern is narrow on purpose: with the year gone, `[a-zé]*` after an abbreviation would turn `3 juntos` or `2 mayores` into invented dates. Replayed on 2026-10-16 with the year forms consumed first: 0 day-and-month substrings remain in the 24 replies, 0 verdicts change. |
-| §8.5 per-rung limits, days at most 3650 and principal at most 1e12, with API issue codes | Exactness measured on 2026-10-16 (§8.5). Placed in §8 as operator limits so §2.1's two domain rules stay the only ones. An out-of-range rung is the existing `invalid_input` condition of §7; the two codes are the only novelty, and no §7 row is needed. |
+| §8.5 per-rung limits, days at most 3650 and principal at most 1e12, with API issue codes | Exactness measured on 2026-10-16 (§8.5). Placed in §8 as operator limits so §2.1's two domain rules stay the only ones. An out-of-range rung is the existing `invalid_input` condition of §7, in the API issue shape of §7.3; the two codes are new, and the §7 table gains its range row in 4B together with the test that pins the table's rows (`src/handler.test.ts:181-204`). |
 | SPEC version 1.1; `evals/cases.json` version stays 1; schema `$id` and file stay `.v1.json` | No input, rule list or budget changed, and the §2.2 block is byte-identical. |
 | §11.3 step 4 also fails `-` before `$` followed by a digit | `excess` and `headroom` are both in A, so a wrong sign on either passed on membership. Replayed on 2026-10-16: 0 of 24 stored replies contain the form. |
 | §8 states that `max_tokens` bounds the reply alone under the pinned model and thinking setting | The 600 figure is correct for `claude-sonnet-5-5` with `between_tools` and wrong for an always-on model; the assumption was unstated. |
@@ -941,7 +972,7 @@ Prompt v1 does not change. Candidate lines for v2, as a new file:
 | Candidate | Line |
 |---|---|
 | A length rule that names the counting method (6 of 24 replies over the cap) | Length. Count the whole reply, headers included; an amount or a percentage counts as one word. At most 90 words with one or two rungs, at most 120 with three or four, at most 160 with five or more. |
-| A cluster gloss that does not echo the payload keys (clustered-maturities runs 2 and 3 wrote "como primero … como último") | Vencimientos agrupados: the rungs of each group mature close together. Give the rung numbers and say that they mature between the group's first maturity and its last, naming both dates; never the length of the window. |
+| A cluster gloss that does not echo the payload keys (clustered-maturities run 3 wrote "como primero … como último"; run 2 "como primer vencimiento … como último") | Vencimientos agrupados: the rungs of each group mature close together. Give the rung numbers and say that they mature between the group's first maturity and its last, naming both dates; never the length of the window. |
 
 ### Rejected 2026-10-19
 

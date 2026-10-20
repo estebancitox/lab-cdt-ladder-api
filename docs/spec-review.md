@@ -2,7 +2,8 @@
 
 Date: 2026-09-13. Reviewed artifact: `SPEC.md` and the design behind `evals/cases.json`.
 Revised 2026-10-19 with SPEC v1.1: the case 1 bullet under accepted finding 18 carries a
-correction; nothing else in this record changed.
+correction, and the request-size note at the end is marked as measured under twelve-digit
+principals; nothing else in this record changed.
 
 This is the record the Decisions section of `SPEC.md` points at. Its purpose is that a
 deferred or rejected finding can be re-read with its reasoning intact rather than
@@ -355,4 +356,7 @@ basis-point gaps. Every trigger set and every figure quoted in the case descript
 exactly.
 
 **Request size.** The largest legal body — 12 rungs, 6 entities, 60-character names, 12-digit
-principals — measures 1.555 bytes, against an 8 KiB cap.
+principals — measures 1.555 bytes, against an 8 KiB cap. Revised 2026-10-19 with SPEC v1.1:
+measured before SPEC §8.5 admitted thirteen-digit principals, and the independent review of
+2026-10-19 could not reproduce the figure (1.558 bytes with a compact serialization); it is
+re-measured in 4B with thirteen digits.
