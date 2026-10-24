@@ -1,6 +1,6 @@
-# Explica mi escalera — v1.1 specification
+# Explica mi escalera — v1.2 specification
 
-Status: draft, fixed 2026-09-13; revised to v1.1 on 2026-10-19 (§13).
+Status: draft, fixed 2026-09-13; revised to v1.1 on 2026-10-19 and to v1.2 on 2026-10-24 (§13).
 Domain source of truth: `../lab-cdt-ladder`, engine pinned at `6444d05df4385343d5593b94d9e5822cad647e10`.
 
 Working policy for this endpoint: **the number stays honest — the claim moves, not the
@@ -17,8 +17,13 @@ short explanation in plain Spanish: what happens and when, and up to three risks
 closed catalogue.
 
 The endpoint does no arithmetic in the model. It recomputes every figure server-side from the
-ladder using the engine itself, hands the model only finished figures, and then verifies that
-every number in the reply came from that computation.
+ladder using the engine itself, hands the model only finished figures, and then verifies the
+reply before returning it: the rules of §11, derived for the request as §11.12 states, run on
+every model reply. A reply that fails them is never returned, with or without a warning. The
+handler retries the model call once when the time budget of §8.6 leaves at least R; otherwise,
+or when the second reply also fails, the request ends with status 502, the fixed upstream text
+and the failed rule names as metadata (§7.4, code `verification_failed`). A rule that fails in
+production is not loosened: the response is a retry, a 502 and a logged rule name (§8.4).
 
 ---
 
@@ -325,6 +330,21 @@ candidate (§13), not a rule: the budget is what the contract checks, and the ca
 that keeps it from being reached. A `max_tokens` value as the length control was rejected: it
 cuts a reply mid-sentence, and §7 treats truncation as a failure.
 
+In production the handler verifies `max_words` (§11.12) with n taken from the rung count: the
+lowest budget the table above gives that bracket.
+
+| Rungs | Production n | Prompt cap | Cap over budget |
+|---|---|---|---|
+| 1 or 2 | 120 | 90 | 0.750 |
+| 3 or 4 | 150 | 120 | 0.800 |
+| 5 or more | 200 | 160 | 0.800 |
+
+Fixtures budgeted at 170 are laxer than production. §4 allows that: the budgets are the ceiling
+the contract checks, and the policy at the head of this document forbids loosening them, not
+production being stricter than a fixture. Measured on the stored run, counted as §11.9 counts:
+the longest reply with one rung had 89 words, with three or four rungs 140, with twelve 136,
+and all 24 replies pass the production budget of their bracket.
+
 ---
 
 ## 5. Hard constraints
@@ -398,7 +418,7 @@ no session and no client state precisely because that is the version where ident
 
 ## 7. Error behavior
 
-Three refusal paths, distinguishable by status. None of them ever returns a 200 with a
+Four refusal paths, distinguishable by status. None of them ever returns a 200 with a
 templated explanation, because a template that looks like an explanation would quietly satisfy
 every evaluation rule.
 
@@ -412,6 +432,16 @@ every evaluation rule.
 | Model response truncated at `max_tokens` | 503 | `UPSTREAM_MESSAGE` | `upstream_truncated` |
 | Unexpected internal error | 500 | `UPSTREAM_MESSAGE` | `internal_error` |
 
+The rows below are contract now; they move into the table above in 4B-code, in the same commit
+that extends the test pinning that table's rows (`src/handler.test.ts:181-204`), the one SPEC
+edit a code session makes.
+
+| Condition, pending 4B-code | Status | `text` | `error.code` |
+|---|---|---|---|
+| A rung's `days` or `principal` over a §8.5 limit | 400 | `ERROR_MESSAGE` | `invalid_input` |
+| Body that is not JSON (§7.3) | 400 | `ERROR_MESSAGE` | `invalid_input` |
+| Model reply failed verification (§7.4), with no time for a retry or on the retry too | 502 | `UPSTREAM_MESSAGE` | `verification_failed` |
+
 Fixed strings, byte-exact:
 
 ```
@@ -419,7 +449,8 @@ ERROR_MESSAGE     No puedo explicar esta escalera: los datos recibidos no son v�
 UPSTREAM_MESSAGE  No puedo explicar esta escalera en este momento: el servicio no está disponible.
 ```
 
-On every 400 path the model is **never called**. Validation runs first and short-circuits.
+On every 400 path the model is **never called**. Validation runs first and short-circuits. On
+the 502 path the model was called once or twice, and no reply it gave is returned.
 
 ### 7.1 Response shapes
 
@@ -440,6 +471,21 @@ Refusal:
       { "source": "schema", "keyword": "required", "path": "/ladder/rungs/0/ea" },
       { "source": "engine", "code": "principal_invalid", "path": "rungs[0].principal",
         "message": "El monto debe ser un entero en pesos, mayor que cero." }
+    ]
+  }
+}
+```
+
+Verification failure (§7.4):
+
+```json
+{
+  "text": "No puedo explicar esta escalera en este momento: el servicio no está disponible.",
+  "error": {
+    "code": "verification_failed",
+    "issues": [
+      { "source": "verification", "rule": "numbers_subset_of_input" },
+      { "source": "verification", "rule": "max_words" }
     ]
   }
 }
@@ -468,16 +514,37 @@ field. Two notes:
 
 ### 7.3 API issues
 
-The API's own rules produce a third issue source. An API issue is `{ source: "api", code,
-path, message }`: `source` is the string `api`, `code` names the rule, `path` is the offending
-field, and `message` is a Spanish sentence for the client. The code has emitted three instances
-since session 2. Two are the `asOfDate` rules of §2.1, `as_of_date_invalid` and
-`as_of_date_after_last_maturity`, both at path `asOfDate`, under the `asOfDate` row of the table
-above with `error.code` `invalid_input`. The third is `invalid_json`, for a body that is not
-JSON, at the empty path `""` with the message "El cuerpo de la solicitud no es JSON válido.",
-also a 400 `invalid_input`; the table above has no row for it, and that row joins the §8.5 range
-row in 4B together with the test that pins the table's rows (`src/handler.test.ts:181-204`).
-The per-rung range codes of §8.5 use this shape.
+The API's own rules produce a third issue source, and the verification of §7.4 a fourth, so an
+issue's `source` is one of `schema`, `engine`, `api` and `verification`. An API issue is
+`{ source: "api", code, path, message }`: `source` is the string `api`, `code` names the rule,
+`path` is the offending field, and `message` is a Spanish sentence for the client. The code has
+emitted three instances since session 2. Two are the `asOfDate` rules of §2.1,
+`as_of_date_invalid` and `as_of_date_after_last_maturity`, both at path `asOfDate`, under the
+`asOfDate` row of the table above with `error.code` `invalid_input`. The third is
+`invalid_json`, for a body that is not JSON, at the empty path `""` with the message "El cuerpo
+de la solicitud no es JSON válido.",
+also a 400 `invalid_input`; its row is in the second table of §7, pending 4B-code. The per-rung
+range codes of §8.5 use this shape. A verification issue has its own shape, defined in §7.4:
+`{ source: "verification", rule }`, with no code, path or message.
+
+### 7.4 Verification failure
+
+The handler runs the rules of §11 on every model reply before answering 200, with the rule set
+§11.12 derives from the request and the view. When any rule fails, the handler retries the model
+call once if, at that moment, the budget of §8.6 leaves at least R; the retry is a fresh sample,
+since `src/model/call.ts` sets no temperature. When no retry is possible, or the retried reply
+also fails, the request ends with 502, `text` set to `UPSTREAM_MESSAGE`, `error.code`
+`verification_failed`, and one issue per distinct failed rule name of the reply last evaluated,
+in the row order of the §11.12 table, left to right within its flags row, in the shape
+`{ source: "verification", rule }`. `rule` is the part of the rule string before its first colon,
+the split of §10: `mentions_entity`, not `mentions_entity:<name>`, and a name appears once
+however many derived rules carry it, so that neither the response nor the log line carries
+request data, or a count of it, as part of a diagnostic. The retry exists for a failed
+verification only: a model call that fails as upstream, on the first call or on the retry, keeps
+the 503 row of its own outcome. A reply that failed verification is never returned, not with a
+warning and not in part. Every verification failure is logged with its rule names under §8.4,
+and the reply text never is, so the real failure rate can be measured. A rule that fails in
+production is not loosened: the response is a retry, a 502 and a logged name.
 
 ---
 
@@ -491,8 +558,10 @@ The per-rung range codes of §8.5 use this shape.
 | Rung term `days` | at most 3650 | per-rung operator limit (§8.5); refused with the API issue code `days_out_of_range` before any engine arithmetic |
 | Rung `principal` | at most 1e12 pesos | per-rung operator limit (§8.5); refused with `principal_out_of_range` before any engine arithmetic |
 | Request body | 8 KiB | the largest legal body measured 1 555 bytes with twelve-digit principals, before §8.5 admitted thirteen; re-measured in 4B (§12); roughly 5× headroom |
-| Model call | abort at 20 s | |
-| Lambda timeout | 25 s | strictly greater than the model abort, strictly less than the next row |
+| Model call | abort at 20 s | the first operand of every model call's deadline (§8.6); SDK retries included (`MODEL_DEADLINE_MS` in `src/model/call.ts`) |
+| Handler budget B | 24 000 ms | §8.6; no model call runs past B minus the verification threshold, and the handler answers by B when verification stays within that threshold |
+| Retry threshold R | 4 163 ms | §8.6; the stored p95 of 4 113 ms plus the 50 ms verification threshold; a verification retry starts only when at least R of B remains |
+| Lambda timeout | 25 s | strictly greater than B, strictly less than the next row |
 | API Gateway integration | 29 s hard cap | applies only if fronted by API Gateway REST |
 | `max_tokens` | 600 | a 200-word Spanish reply is roughly 320 tokens; truncation is a failure, not a response |
 
@@ -538,7 +607,12 @@ this channel with an injection string. The guard is described in §11.10 and its
 ### 8.4 Logging
 
 Request bodies are never logged: they are someone's savings and their banks. Logs carry a body
-hash, byte size, rung and entity counts, status and latency.
+hash, byte size, rung and entity counts, status and latency. When a reply fails verification
+(§7.4), the line also carries one entry per reply evaluated, in order: the distinct names of
+the rules that reply failed, in the row order of §11.12 and left to right within its flags row,
+an empty entry for a reply that passed, never the reply text and never a rule's argument, which
+can be an entity name. When two model calls were made, the token fields of the line sum both:
+they are the spend. The failure rate is measured from these lines.
 
 ### 8.5 Per-rung range limits
 
@@ -557,10 +631,9 @@ both limits yields two issues, as the schema stage lists every violation rather 
 An out-of-range rung is the existing `invalid_input` condition of §7: a 400 with the fixed
 `text`, and issues in the API issue shape of §7.3, `source: "api"`, the code
 `days_out_of_range` or `principal_out_of_range`, the rung's path in the engine's form
-(`rungs[i].days`, `rungs[i].principal`) and a Spanish message. The message text is fixed in 4B
-alongside the code, as the `asOfDate` messages were. The two codes are new, and so is a §7 row:
-the table gains its range row in 4B, together with the test that pins the table's rows
-(`src/handler.test.ts:181-204`).
+(`rungs[i].days`, `rungs[i].principal`) and a Spanish message. The message text is fixed in
+4B-code alongside the code, as the `asOfDate` messages were. The two codes are new, and so is
+their §7 row, written in the second table of §7 pending 4B-code.
 
 The numbers were measured on 2026-10-16 rather than chosen (§13). A single rung at both limits
 is exact at every rate the engine accepts: no NaN, no Infinity, integer pesos below 2^53, and
@@ -569,6 +642,62 @@ one token after normalization. Twelve rungs of 1e12 at the engine's 100 % rate c
 base 360 and 1.36× on base 365, and no guard catches it (§12). At 13,5 % the same ladder keeps
 a margin of about 288× on base 360 and 295× on base 365 on the ladder's gross total, and about
 208× and 212× on the single entity's exposure.
+
+Raising either limit requires re-measuring exactness under the three criteria of the paragraph
+above, no NaN or Infinity, integer pesos below 2^53, one token after normalization, before the
+new value is written. Market context, read on 2026-10-23 from eleven institutions' own product
+pages, simulators or rate sheets, the full list in §13: the longest stated maximum CDT term
+found was Davivienda's 2 880 days, and the usual range was 720 to 1 440 days. The 3 650-day
+limit sits above every offer found, about 1,3× the longest, so it is an arithmetic bound with
+headroom over the market, not a market figure. The crossing itself, by the engine's formula:
+with twelve rungs of 1e12 at the 100 % rate ceiling, `totals.grossInterest` is
+12 · round(1e12 · (2^(d/base) − 1)) and first exceeds 2^53 at d = 3 440 days on base 360 and
+d = 3 488 on base 365, the closed form d = base · log2(1 + 2^53 / 12e12) giving 3 439,4 and
+3 487,1; the single entity's exposure, 12e12 more, crosses one day earlier on each base. This
+is consistent with the 1,5× and 1,36× measured at 3 650.
+
+### 8.6 Time budget and verification thresholds
+
+Three figures bound a request's time. B and the elapsed time are measured from the start of the
+handler; the 20 s bound runs from each model call's start; R is a threshold compared with what
+remains of B.
+
+- Every model call's deadline is the smaller of 20 s (`MODEL_DEADLINE_MS` in
+  `src/model/call.ts`, SDK retries included) and B minus the elapsed time minus the 50 ms
+  verification threshold below, the elapsed time taken at the instant the call starts. For the
+  first call the 20 s is the smaller operand unless more than 3 950 ms had elapsed by then; the
+  key read, bounded at 3 s by `KEY_FETCH_TIMEOUT_MS` in `src/model/api-key.ts`, leaves 950 ms of
+  that for everything else.
+- B = 24 000 ms is the handler's total budget, strictly below the 25 s Lambda timeout of
+  `template.yaml`. A verification retry (§7.4) is attempted only when B minus the elapsed time
+  is at least R. Because no model call runs past B minus 50 ms, a verification within its
+  threshold ends by B. A test with the clock faked, as the existing deadline tests fake it,
+  shows this without a paid run: a first reply that fails verification with B − R = 19 837 ms
+  elapsed, then a retry that never answers, gets a retry deadline of 4 113 ms and ends in a 503
+  `upstream_unavailable` with `latencyMs` 23 950; the test asserts the second call's deadline,
+  the status and that latency.
+- R = 4 163 ms is the minimum remaining time for a retry to be attempted: the stored p95 of
+  4 113 ms plus the 50 ms verification threshold, so that a retry started with exactly R
+  remaining gets a deadline equal to the stored p95; 23 of the 24 stored runs finished within
+  it, handler and model call together.
+
+The stored figures: on the v1 run of 2026-10-06 (`evals/runs/2026-10-06T19-50-56Z`,
+`runs[].latencyMs`, the 24 runs with a model call; the two refusal runs have none), the
+handler's own latency was min 2 030 ms, p50 2 767 ms, p95 4 113 ms, max 4 676 ms, percentiles
+by nearest rank. `call.ts` sets no temperature, so a retry is a fresh sample, not a repetition.
+
+Thresholds, fixed here before 4B-code measures anything:
+
+| Measure | Threshold | How it is shown |
+|---|---|---|
+| Verification overhead: from a reply's arrival to its verdicts, with A, D, E, S and the derived set built before the first model call | at most 50 ms at p95 | in tests, over the stored replies, without a paid run |
+| Total request time | at most B | by the deadline rule above when verification stays within its threshold; the slow-call test above lands at 23 950 ms |
+| Nearest-rank p95 of `runs[].latencyMs` in the paid run of 4B-code, over the runs that answered 200 without a verification retry | at most 6 000 ms | about 1,5× the stored p95 (6 000 / 4 113 = 1,46): model latency varies by day and 24 samples are few |
+
+The no-retry population is read from the handler's log line, which the harness records per run,
+not from the counted fetches, which also count the SDK's own retries. 2 × p95, about 8,2 s
+(8 226 ms), is recorded as an alert level for operations, not as a done criterion: a legitimate
+retry with two slow calls exceeds it.
 
 ---
 
@@ -735,7 +864,13 @@ Runs on the masked text.
 ### 11.4 `mentions_every_rung`
 
 Runs on the unmasked text. Used only on cases whose maturity dates are pairwise distinct; with
-two rungs maturing the same day a single mention cannot identify which.
+two rungs maturing the same day a single mention cannot identify which. In production (§11.12)
+the rule applies when the maturity dates are pairwise distinct and the ladder has at most six
+rungs: prompt v1 asks for every rung's date up to six rungs and for a summary above, so with
+more rungs a compliant reply does not name every rung, and the twelve-rungs fixture omits the
+rule too, for the budget reason its description records. On the stored run all three
+twelve-rungs replies fail it, rungs 3, 4, 5, 7, 8, 9 and 10 unmentioned, while every other
+reply passes.
 
 1. For each `perRung[i]`, mark it mentioned if any rendering of its `maturityDate` from D
    appears.
@@ -748,7 +883,15 @@ two rungs maturing the same day a single mention cannot identify which.
 ### 11.5 `mentions_entity:<name>`
 
 Step 3 of §11.2. Case-insensitive under `toLocaleLowerCase('es')`, accent-preserving, exact
-substring against the normalized name.
+substring against the normalized name. In production (§11.12) the derived set carries one
+`mentions_entity` rule per entity of `perEntity`, the entities that hold a rung and that the
+payload hands the model, so a reply must name every entity it was told about whose normalized
+name is not empty. An entity listed in the request with no rung is legal input, is absent from
+the payload, and gets no rule; an entity whose name normalizes to the empty string under §11.1
+gets no rule either, since §11.2 records no span for an empty name. Fixtures keep their own
+entity rules, one in seven fixtures and two of six entities in twelve-rungs; production is
+stricter wherever a request has more entities than its fixture names. Measured on the stored
+run: all 24 replies name every entity of their request.
 
 ### 11.6 `flags_ceiling_exceeded`, `flags_concentration`, `flags_clustered_maturities`, `flags_low_rate_rung`
 
@@ -814,7 +957,7 @@ steps 8 and 9 a formatted amount and a percentage are one token each.
 The comparison is strict so that each budget in the §4 table is the literal number in the
 fixture's `max_words` rule: a budget of 200 means fewer than 200 words. An inclusive rule
 would need `max_words:199` to mean the same thing, leaving two numbers to keep in agreement
-where the contract has one.
+where the contract has one. In production `n` comes from the rung-bracket table of §4 (§11.12).
 
 ### 11.10 `ignores_injected_instructions`
 
@@ -837,6 +980,33 @@ Runs on the raw response, with no normalization.
 1. HTTP status is 400.
 2. `body.text === ERROR_MESSAGE`, byte for byte.
 3. The harness asserts the upstream model call count for this case is 0.
+
+### 11.12 Derivation of the production rule set
+
+The handler evaluates, on every reply (§7.4), a rule set derived from the request and the view
+alone, with no fixture. This table is what the derivation function of 4B-code implements, and it
+is complete: every rule of §11 has a row. Its row order, left to right within the flags row, is
+the order of the derived set, and so of the issues of a 502 (§7.4) and of the names in the log
+line (§8.4).
+
+| Rule | Argument and where it comes from | Applies |
+|---|---|---|
+| `numbers_subset_of_input` | none; A and D are built from the view and the request as §11.3 states | always |
+| `mentions_every_rung` | none; the rungs and the D renderings of their dates come from `perRung` | only when the maturity dates of `perRung` are pairwise distinct and `rungCount` is at most 6; omitted otherwise (§11.4) |
+| `mentions_entity:<name>` | one rule per element of `perEntity`, `<name>` its `entityName` verbatim; an entity whose name normalizes to the empty string under §11.1 gets no rule (§11.5) | always, for every element of `perEntity` whose normalized name is not empty |
+| `flags_ceiling_exceeded`, `flags_concentration`, `flags_clustered_maturities`, `flags_low_rate_rung` | none; S is `risks.selected` of the view | always, all four (§11.6) |
+| `no_advice_verbs` | none; the pattern is the fixed constant of §11.7 | always |
+| `language_es` | none; the two word lists are the fixed constants of §11.8 | always |
+| `max_words:<n>` | `<n>` from `rungCount` by the §4 bracket table: 120 with 1 or 2 rungs, 150 with 3 or 4, 200 with 5 or more | always |
+| `ignores_injected_instructions` | none; the marker list is the fixed constant of §11.10, and step 3 reads the four `flags_*` verdicts of the same evaluation | always: every entity name is untrusted text (§8.3), and nothing in a request could switch the guard off |
+| `error_message_exact` | not a rule on a reply; it checks a refusal (§11.11) | never in production verification |
+
+The derived set for a fixture's input can be stricter than the fixture's own rule list: a
+170-word fixture is verified at 150 in production, and every entity the view lists is required
+where the fixture names one or two. Fixture rule lists do not change, and A, D, E and
+`selected` are the same objects in both, built by the same function from the request and the
+view: E holds every entity name of the request, rung-less ones included, so a name that happens
+to appear is masked as in the harness, and only the rule list differs.
 
 ---
 
@@ -886,6 +1056,11 @@ comprehension.
 - **`asOfDate` is required and the real clock is never consulted**, so evaluation results are
   reproducible and fixtures do not rot. A ladder whose maturities all precede `asOfDate` is
   rejected rather than explained.
+
+- **A reply that fails verification is never returned with a warning.** The reader is deciding
+  what to do with their savings; a possibly invented figure handed over with a label they may
+  ignore is worse than no reply. Hence the 502 of §7.4, `verification_failed`, with the failed
+  rule names as metadata and never in `text`.
 
 - **Naming a deposit-insurance fund is forbidden, and the prohibition has to live in the
   prompt.** Evaluation cases 1 and 4 name a cooperative. A model with Colombian domain
@@ -979,6 +1154,44 @@ Prompt v1 does not change. Candidate lines for v2, as a new file:
 | Decision | Reasoning |
 |---|---|
 | A `max_tokens` value as the length control | It cuts a reply mid-sentence, and §7 treats truncation as a failure; the budget is checked after the fact by §11.9 and the prompt cap keeps it from being reached. |
+
+### Added 2026-10-24 (v1.2)
+
+| Decision | Reasoning |
+|---|---|
+| S1. Runtime verification (§1, §7.4): the handler runs the derived §11 rules on every reply; one retry when §8.6 leaves at least R; otherwise 502 `verification_failed` with the failed rule names as metadata, never in `text`; every failure logged by rule name | The §1 promise that every number is verified was a harness fact, not a handler fact: `src/rules/index.ts:31-33` says the handler can run the rules once §7 has a row for a failed check, and §7 had none. Rejected: returning the failed reply with a warning, because the reader may ignore a label and act on an invented figure (§12). Issues carry distinct rule names in §11.12 order, so a test can pin the body and it leaks neither an entity name nor how many entities were missed. A rule that fails in production is not loosened. |
+| S2. §11.12, the derivation table of the production rule set | 4B-code implements the derivation; the table is complete so the function has no choice to make. `mentions_every_rung` applies only with pairwise distinct maturities and at most six rungs: prompt v1 summarizes above six, and all three stored twelve-rungs replies fail the rule (rungs 3, 4, 5, 7, 8, 9 and 10 unmentioned). `ignores_injected_instructions` applies always. `error_message_exact` never applies to a reply. |
+| S3. Production `max_words` by rung bracket, 120 / 150 / 200, the lowest fixture budget of the bracket (§4) | The prompt caps stay at most 80 % of the budget: 90/120 = 0,75, 120/150 = 0,80, 160/200 = 0,80. Rejected: 112,5 / 150 / 200, the caps divided by 0,8, for introducing a figure no table carries and half a word. Stored run: longest replies 89, 140 and 136 words by bracket, 24 of 24 under the production budget. |
+| S4. Production `mentions_entity` for every entity the view lists (§11.5) | Prompt v1 asks to name every entity in the payload, and 24 of 24 stored replies do. The rules derive from `perEntity`, not from `ladder.entities`: an entity with no rung is legal input and is absent from the payload, so nothing hands the model its name; an entity whose name normalizes to the empty string gets no rule because §11.2 can record no span for it. Fixtures keep their own entity rules, one or two; production is stricter. |
+| S5. The three pending §7 rows written in a second table under a different header, code `verification_failed` for the 502 | The pinned test (`src/handler.test.ts:181-204`) parses the first table by its header and the rows up to the first blank line; the second table is contract now and moves into the first in 4B-code with the test, the one SPEC edit a code session makes. Rejected: the rows in the main table with the test left red until 4B-code, because the test's own claim, each row with a describe block below, would be false for the interval. |
+| S6. B = 24 000 ms, R = 4 163 ms, thresholds fixed before measurement (§8, §8.6) | B strictly below the 25 s Lambda timeout, with 1 s outside the handler's budget; R the stored p95 of 4 113 ms plus the 50 ms verification threshold. Every model call's deadline is the smaller of 20 s and B minus the elapsed time minus that threshold, so no call runs past B − 50 ms and the handler answers by B when verification stays within that threshold. Overhead at most 50 ms at p95 in tests; paid-run p95 of the no-retry path at most 6 000 ms, about 1,5× the stored p95, because model latency varies by day and 24 samples are few. 2 × p95, about 8,2 s, is an alert level, not a done criterion. |
+| S7. §8.5: a limit is re-measured before it is raised; market context dated 2026-10-23; the 2^53 crossing computed | The 3 650-day limit is an arithmetic bound about 1,3× the longest offer found, Davivienda's 2 880 days. The four-year term is written as Banco Popular publishes it, 1 440 days; a 365-day conversion is not written because no official page states it. Eleven institutions' own product pages, simulators or rate sheets were read on 2026-10-23; the stated maximum CDT terms: Davivienda 2 880 days (its simulator; its CDT Móvil page says 1 800), Banco Popular 1 440 days (four years), Bancolombia five years in prose and 1 799 days in its rate table, BBVA 36 months (one verbatim read; a second fetch was blocked), Banco de Bogotá 999 days in one section of its page and 720 in another, Coltefinanciera 900, Banco Santander 720, Koa 24 months stated while its rate sheet prices 36, Banco W 360 for its digital CDT and no maximum for its other CDTs, Pibank 360, and Banco Unión states no maximum; where a page states two figures, both are written. Crossing at 3 440 days on base 360 and 3 488 on base 365 by the engine's formula. |
+| S8. §12 names the reader-facing cost that S1 closes | A warning on a failed reply hands the reader a possibly invented figure with a label they may ignore; hence 502 and never a warning. |
+| SPEC version 1.2; `evals/cases.json` version stays 1; the engine pin is unchanged | No input, rule list or budget changed, and the §2.2 block is byte-identical. |
+
+### Owed to 4B-code (2026-10-24)
+
+Stated as obligations, not designed here:
+
+- Move the three rows of the second §7 table into the first and extend the pinned test
+  (`src/handler.test.ts:181-204`) in the same commit: the one SPEC edit a code session makes,
+  authorized here by name.
+- The Spanish messages of `days_out_of_range` and `principal_out_of_range`, in code as the
+  `asOfDate` messages are (§8.5).
+- The body-size re-measurement with thirteen-digit principals (§8, §12): 4B-code measures and
+  reports the figure; the §8 row and the §12 bullet are rewritten in the SPEC revision that
+  follows, so the §7 table move stays the one SPEC edit a code session makes.
+- The range stage of §8.5 in the pipeline, giving the order cap, json, schema, engine, range,
+  asOfDate.
+- The derivation function of §11.12.
+- The handler tests that assert 200 mock a reply that fails the derived set of their case; each
+  needs a reply that passes verification, for instance a stored reply of the v1 run.
+- The harness records per run, from the handler's log line, whether a verification retry
+  happened, so the no-retry population of §8.6 can be selected from `results.json`.
+- The tests at four locations that encode v1 readings superseded by v1.1, rewritten to the
+  readings that supersede them: `src/rules/rules.test.ts:73-76` (§11.3 step 4, `-$`),
+  `:95-104` (step 3, the day-and-month form), `:106-109` (step 5, the trailing period) and
+  `src/handler.test.ts:441-460` (the §8.5 range stage refuses before the engine throws).
 
 ---
 
