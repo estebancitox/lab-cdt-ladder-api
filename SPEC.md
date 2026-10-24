@@ -21,9 +21,10 @@ ladder using the engine itself, hands the model only finished figures, and then 
 reply before returning it: the rules of §11, derived for the request as §11.12 states, run on
 every model reply. A reply that fails them is never returned, with or without a warning. The
 handler retries the model call once when the time budget of §8.6 leaves at least R; otherwise,
-or when the second reply also fails, the request ends with status 502, the fixed upstream text
-and the failed rule names as metadata (§7.4, code `verification_failed`). A rule that fails in
-production is not loosened: the response is a retry, a 502 and a logged rule name (§8.4).
+or when the second reply also fails verification, the request ends with status 502, the fixed
+upstream text and the failed rule names as metadata (§7.4, code `verification_failed`). A rule
+that fails in production is not loosened: the response is a retry, a 502 and a logged rule name
+(§8.4).
 
 ---
 
@@ -418,9 +419,9 @@ no session and no client state precisely because that is the version where ident
 
 ## 7. Error behavior
 
-Four refusal paths, distinguishable by status. None of them ever returns a 200 with a
-templated explanation, because a template that looks like an explanation would quietly satisfy
-every evaluation rule.
+Every error path is a row of the two tables below, with a fixed status and `error.code`. None of
+them ever returns a 200 with a templated explanation, because a template that looks like an
+explanation would quietly satisfy every evaluation rule.
 
 | Condition | Status | `text` | `error.code` |
 |---|---|---|---|
@@ -607,12 +608,13 @@ this channel with an injection string. The guard is described in §11.10 and its
 ### 8.4 Logging
 
 Request bodies are never logged: they are someone's savings and their banks. Logs carry a body
-hash, byte size, rung and entity counts, status and latency. When a reply fails verification
-(§7.4), the line also carries one entry per reply evaluated, in order: the distinct names of
-the rules that reply failed, in the row order of §11.12 and left to right within its flags row,
-an empty entry for a reply that passed, never the reply text and never a rule's argument, which
-can be an entity name. When two model calls were made, the token fields of the line sum both:
-they are the spend. The failure rate is measured from these lines.
+hash, byte size, rung and entity counts, status, latency and, when a model reply arrived, its
+token counts. When a reply fails verification (§7.4), whatever status the request then ends in,
+the line also carries one entry per reply evaluated, in order: the distinct names of the rules
+that reply failed, in the row order of §11.12 and left to right within its flags row, an empty
+entry for a reply that passed, never the reply text and never a rule's argument, which can be an
+entity name. When two model calls were made, the token fields of the line sum both: they are the
+spend. The failure rate is measured from these lines.
 
 ### 8.5 Per-rung range limits
 
@@ -690,14 +692,14 @@ Thresholds, fixed here before 4B-code measures anything:
 
 | Measure | Threshold | How it is shown |
 |---|---|---|
-| Verification overhead: from a reply's arrival to its verdicts, with A, D, E, S and the derived set built before the first model call | at most 50 ms at p95 | in tests, over the stored replies, without a paid run |
+| Verification overhead: from a reply's arrival to its verdicts, with A, D, S, the entity names of the request and the derived set built before the first model call, and the §11.2 spans built inside the window from the reply | at most 50 ms, nearest-rank p95 | in tests, over the 24 stored replies, on the host that runs the suite, without a paid run |
 | Total request time | at most B | by the deadline rule above when verification stays within its threshold; the slow-call test above lands at 23 950 ms |
 | Nearest-rank p95 of `runs[].latencyMs` in the paid run of 4B-code, over the runs that answered 200 without a verification retry | at most 6 000 ms | about 1,5× the stored p95 (6 000 / 4 113 = 1,46): model latency varies by day and 24 samples are few |
 
-The no-retry population is read from the handler's log line, which the harness records per run,
-not from the counted fetches, which also count the SDK's own retries. 2 × p95, about 8,2 s
-(8 226 ms), is recorded as an alert level for operations, not as a done criterion: a legitimate
-retry with two slow calls exceeds it.
+The no-retry population is read from the handler's log line, which the harness will record per
+run, as §13 owes to 4B-code, not from the counted fetches, which also count the SDK's own
+retries. 2 × p95, about 8,2 s (8 226 ms), is recorded as an alert level for operations, not as a
+done criterion: a legitimate retry with two slow calls exceeds it.
 
 ---
 
@@ -788,7 +790,9 @@ exactly the text that rule looks for.
 1. Normalize every entity name with N.
 2. Scan the normalized output for each normalized name, comparing under
    `toLocaleLowerCase('es')`, **longest name first**, so a short name that is a prefix of a
-   longer one does not steal the span. Record every match span per entity.
+   longer one does not steal the span. Record every match span per entity; a match that
+   overlaps a span already recorded is skipped, and a name that normalizes to the empty string
+   is not searched and records no span.
 3. **Evaluate `mentions_entity:<name>` now.** It passes if and only if at least one span was
    recorded for that entity.
 4. **Only now** build the masked text, replacing every recorded span with the single token
@@ -888,10 +892,12 @@ substring against the normalized name. In production (§11.12) the derived set c
 payload hands the model, so a reply must name every entity it was told about whose normalized
 name is not empty. An entity listed in the request with no rung is legal input, is absent from
 the payload, and gets no rule; an entity whose name normalizes to the empty string under §11.1
-gets no rule either, since §11.2 records no span for an empty name. Fixtures keep their own
-entity rules, one in seven fixtures and two of six entities in twelve-rungs; production is
-stricter wherever a request has more entities than its fixture names. Measured on the stored
-run: all 24 replies name every entity of their request.
+gets no rule either, since §11.2 records no span for an empty name. Two entities whose raw
+names differ but are equal after §11.1 and lowercasing are not told apart by §11.2, which gives
+every match to one of them; how such a request is answered is owed to 4B-code (§13). Fixtures
+keep their own entity rules, one in seven fixtures and two of six entities in twelve-rungs;
+production is stricter wherever a request has more entities than its fixture names. Measured on
+the stored run: all 24 replies name every entity of their request.
 
 ### 11.6 `flags_ceiling_exceeded`, `flags_concentration`, `flags_clustered_maturities`, `flags_low_rate_rung`
 
@@ -1003,10 +1009,11 @@ line (§8.4).
 
 The derived set for a fixture's input can be stricter than the fixture's own rule list: a
 170-word fixture is verified at 150 in production, and every entity the view lists is required
-where the fixture names one or two. Fixture rule lists do not change, and A, D, E and
-`selected` are the same objects in both, built by the same function from the request and the
-view: E holds every entity name of the request, rung-less ones included, so a name that happens
-to appear is masked as in the harness, and only the rule list differs.
+where the fixture names one or two. Fixture rule lists do not change, and A, D, `selected` and
+the entity-name list that §11.2 scans for are the same objects in both, built by the same
+function from the request and the view: that list holds every entity name of the request,
+rung-less ones included, so a name that happens to appear is masked as in the harness, and only
+the rule list differs.
 
 ---
 
@@ -1165,7 +1172,7 @@ Prompt v1 does not change. Candidate lines for v2, as a new file:
 | S4. Production `mentions_entity` for every entity the view lists (§11.5) | Prompt v1 asks to name every entity in the payload, and 24 of 24 stored replies do. The rules derive from `perEntity`, not from `ladder.entities`: an entity with no rung is legal input and is absent from the payload, so nothing hands the model its name; an entity whose name normalizes to the empty string gets no rule because §11.2 can record no span for it. Fixtures keep their own entity rules, one or two; production is stricter. |
 | S5. The three pending §7 rows written in a second table under a different header, code `verification_failed` for the 502 | The pinned test (`src/handler.test.ts:181-204`) parses the first table by its header and the rows up to the first blank line; the second table is contract now and moves into the first in 4B-code with the test, the one SPEC edit a code session makes. Rejected: the rows in the main table with the test left red until 4B-code, because the test's own claim, each row with a describe block below, would be false for the interval. |
 | S6. B = 24 000 ms, R = 4 163 ms, thresholds fixed before measurement (§8, §8.6) | B strictly below the 25 s Lambda timeout, with 1 s outside the handler's budget; R the stored p95 of 4 113 ms plus the 50 ms verification threshold. Every model call's deadline is the smaller of 20 s and B minus the elapsed time minus that threshold, so no call runs past B − 50 ms and the handler answers by B when verification stays within that threshold. Overhead at most 50 ms at p95 in tests; paid-run p95 of the no-retry path at most 6 000 ms, about 1,5× the stored p95, because model latency varies by day and 24 samples are few. 2 × p95, about 8,2 s, is an alert level, not a done criterion. |
-| S7. §8.5: a limit is re-measured before it is raised; market context dated 2026-10-23; the 2^53 crossing computed | The 3 650-day limit is an arithmetic bound about 1,3× the longest offer found, Davivienda's 2 880 days. The four-year term is written as Banco Popular publishes it, 1 440 days; a 365-day conversion is not written because no official page states it. Eleven institutions' own product pages, simulators or rate sheets were read on 2026-10-23; the stated maximum CDT terms: Davivienda 2 880 days (its simulator; its CDT Móvil page says 1 800), Banco Popular 1 440 days (four years), Bancolombia five years in prose and 1 799 days in its rate table, BBVA 36 months (one verbatim read; a second fetch was blocked), Banco de Bogotá 999 days in one section of its page and 720 in another, Coltefinanciera 900, Banco Santander 720, Koa 24 months stated while its rate sheet prices 36, Banco W 360 for its digital CDT and no maximum for its other CDTs, Pibank 360, and Banco Unión states no maximum; where a page states two figures, both are written. Crossing at 3 440 days on base 360 and 3 488 on base 365 by the engine's formula. |
+| S7. §8.5: a limit is re-measured before it is raised; market context dated 2026-10-23; the 2^53 crossing computed | The 3 650-day limit is an arithmetic bound about 1,3× the longest offer found, Davivienda's 2 880 days. The four-year term is written as Banco Popular publishes it, 1 440 days; a 365-day conversion is not written because no official page states it. Eleven institutions' own product pages, simulators or rate sheets were read on 2026-10-23; the stated maximum CDT terms: Davivienda 2 880 days (its simulator; its CDT Móvil page says 1 800), Banco Popular 1 440 days (four years), Bancolombia five years in prose and 1 799 days in its rate table, BBVA 36 months (one verbatim read; a second fetch was blocked), Banco de Bogotá 999 days in one section of its page and 720 in another, Coltefinanciera 900 days on its product page and two years in a FAQ, Banco Santander 720, Koa 24 months in its requirements and 36 in a FAQ and its rate table, Banco W 360 for its digital CDT and no maximum for its other CDTs, Pibank 360, and Banco Unión states no maximum; where a page states two figures, both are written; the second figures of Coltefinanciera and Koa, present in the 2026-10-23 copies, were noticed on 2026-10-24. Crossing at 3 440 days on base 360 and 3 488 on base 365 by the engine's formula. |
 | S8. §12 names the reader-facing cost that S1 closes | A warning on a failed reply hands the reader a possibly invented figure with a label they may ignore; hence 502 and never a warning. |
 | SPEC version 1.2; `evals/cases.json` version stays 1; the engine pin is unchanged | No input, rule list or budget changed, and the §2.2 block is byte-identical. |
 
@@ -1184,13 +1191,24 @@ Stated as obligations, not designed here:
 - The range stage of §8.5 in the pipeline, giving the order cap, json, schema, engine, range,
   asOfDate.
 - The derivation function of §11.12.
+- Two entities whose raw names differ but are equal after N and lowercasing: §11.2 gives every
+  match to one of them, so the other's `mentions_entity` rule fails on every reply and the
+  request would end in 502 on every call; no fixture is in this class. 4B-code settles it before
+  the paid run, by refusing such a request as invalid input or by deriving one rule per distinct
+  normalized name with the scanner keyed the same way, and the SPEC revision that follows
+  records the choice.
 - The handler tests that assert 200 mock a reply that fails the derived set of their case; each
   needs a reply that passes verification, for instance a stored reply of the v1 run.
 - The harness records per run, from the handler's log line, whether a verification retry
   happened, so the no-retry population of §8.6 can be selected from `results.json`.
-- The tests at four locations that encode v1 readings superseded by v1.1, rewritten to the
-  readings that supersede them: `src/rules/rules.test.ts:73-76` (§11.3 step 4, `-$`),
-  `:95-104` (step 3, the day-and-month form), `:106-109` (step 5, the trailing period) and
+- The log-line test that every value on a 200 is an id, a hash, a number or null
+  (`src/handler.test.ts:769-773`) admits the §8.4 verification entries on a 200 reached after a
+  retry: rule names are constants of §11, not request data; the key and its encoding are
+  4B-code's to name.
+- The tests at four locations that encode v1 readings superseded by v1.1, together with the
+  patterns of `src/rules/rules.ts` that those tests pin, rewritten to the readings that
+  supersede them: `src/rules/rules.test.ts:73-76` (§11.3 step 4, `-$`), `:95-104` (step 3, the
+  day-and-month form), `:106-109` (step 5, the trailing period) and
   `src/handler.test.ts:441-460` (the §8.5 range stage refuses before the engine throws).
 
 ---
