@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "ask": [
+      "Edit(/SPEC.md)",
+      "Edit(/evals/cases.json)"
+    ],
+    "deny": [
+      "Bash(npm run eval:live *)",
+      "Bash(node .eval/live.cjs *)"
+    ]
+  }
+}
