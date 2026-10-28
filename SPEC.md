@@ -640,8 +640,8 @@ their §7 row, written in the second table of §7 pending 4B-code.
 The numbers were measured on 2026-10-16 rather than chosen (§13). A single rung at both limits
 is exact at every rate the engine accepts: no NaN, no Infinity, integer pesos below 2^53, and
 one token after normalization. Twelve rungs of 1e12 at the engine's 100 % rate ceiling over
-3650 days push the ladder's totals and a single entity's exposure past 2^53, by about 1.5× on
-base 360 and 1.36× on base 365, and no guard catches it (§12). At 13,5 % the same ladder keeps
+3650 days push the ladder's totals and a single entity's exposure past 2^53, by about 1,5× on
+base 360 and 1,36× on base 365, and no guard catches it (§12). At 13,5 % the same ladder keeps
 a margin of about 288× on base 360 and 295× on base 365 on the ladder's gross total, and about
 208× and 212× on the single entity's exposure.
 
@@ -792,9 +792,13 @@ exactly the text that rule looks for.
    `toLocaleLowerCase('es')`, **longest name first**, so a short name that is a prefix of a
    longer one does not steal the span. Record every match span per entity; a match that
    overlaps a span already recorded is skipped, and a name that normalizes to the empty string
-   is not searched and records no span.
+   is not searched and records no span. A name's length is its number of UTF-16 code units
+   after N, before lowercasing; names of equal length are searched in the order of the
+   request's `entities`. Every occurrence of a name is a match, left to right, overlapping
+   occurrences of the same name included.
 3. **Evaluate `mentions_entity:<name>` now.** It passes if and only if at least one span was
-   recorded for that entity.
+   recorded for that entity or for another whose normalized name compares equal to its own
+   under `toLocaleLowerCase('es')`.
 4. **Only now** build the masked text, replacing every recorded span with the single token
    `«ENTIDAD»`.
 5. Route each rule to the right text:
@@ -805,9 +809,11 @@ exactly the text that rule looks for.
 | Unmasked | `mentions_every_rung`, `max_words`, header presence |
 | Neither (raw body) | `error_message_exact` |
 
-Masking is what stops an entity name from failing rules the model did not break: a name
-containing digits cannot poison the number check, a name containing `Tope del seguro:` cannot
-forge a risk label, and an injected imperative cannot trip the advice-verb scan.
+Masking is what stops an entity name from failing rules the model did not break, wherever §11.2
+recorded the name's span: a name containing digits cannot poison the number check, a name
+containing `Tope del seguro:` cannot forge a risk label, and an injected imperative cannot trip
+the advice-verb scan. A match skipped in step 2 is not masked: where a reply runs two names
+together, the part of the skipped match outside the recorded span stays in the masked text.
 
 ### 11.3 `numbers_subset_of_input`
 
@@ -892,9 +898,10 @@ substring against the normalized name. In production (§11.12) the derived set c
 payload hands the model, so a reply must name every entity it was told about whose normalized
 name is not empty. An entity listed in the request with no rung is legal input, is absent from
 the payload, and gets no rule; an entity whose name normalizes to the empty string under §11.1
-gets no rule either, since §11.2 records no span for an empty name. Two entities whose raw
-names differ but are equal after §11.1 and lowercasing are not told apart by §11.2, which gives
-every match to one of them; how such a request is answered is owed to 4B-code (§13). Fixtures
+gets no rule either, since §11.2 records no span for an empty name. Two entities whose
+normalized names compare equal under `toLocaleLowerCase('es')`, identical names included,
+cannot be told apart by a substring: §11.2 records their spans under the one it searches first,
+and step 3 credits them to both, so a reply that names one names both (§12). Fixtures
 keep their own entity rules, one in seven fixtures and two of six entities in twelve-rungs;
 production is stricter wherever a request has more entities than its fixture names. Measured on
 the stored run: all 24 replies name every entity of their request.
@@ -947,7 +954,7 @@ Runs on the masked text.
 
 The English list is audited to contain no Spanish homograph. Words like `a`, `no`, `son`, `ten`,
 `den`, `van`, `sin`, `fin`, `con` and `ha` are excluded for exactly that reason, and the scan
-runs on masked text so an entity named in English cannot fail it.
+runs on masked text so an entity named in English cannot fail it where §11.2 recorded its span.
 
 Both lists are matched as written, case-sensitively: no case flag is applied to the patterns
 of steps 2 and 3. This is scoped to this rule; §11.6, §11.7 and §11.10 state their own case
@@ -1012,8 +1019,8 @@ The derived set for a fixture's input can be stricter than the fixture's own rul
 where the fixture names one or two. Fixture rule lists do not change, and A, D, `selected` and
 the entity-name list that §11.2 scans for are the same objects in both, built by the same
 function from the request and the view: that list holds every entity name of the request,
-rung-less ones included, so a name that happens to appear is masked as in the harness, and only
-the rule list differs.
+rung-less ones included, so a name that happens to appear is masked as in the harness where
+§11.2 recorded its span, and only the rule list differs.
 
 ---
 
@@ -1048,6 +1055,14 @@ comprehension.
   single rung is always exact; twelve rungs at the principal limit, at the engine's 100 % rate
   ceiling, over 3650 days, carry totals and a single entity's exposure past 2^53 with no error
   raised. Recorded, not guarded: a guard belongs upstream in the engine.
+- **Two entities for one institution split its exposure.** The engine groups exposure by
+  `entityId` (`src/engine/exposure.ts`), so two entities that are one real institution are
+  compared separately with the insurance ceiling and with the 60 % concentration threshold,
+  whether their names compare equal ("Banco" and "BANCO", which §11.2 credits as one name) or
+  not ("Bancolombia" and "Bancolombia S.A."), and the payload hands the model two capitals and
+  two shares where the insurance sees one institution. The frontend warns when two names are
+  equal after trimming and lowercasing, and blocks nothing; the API has no channel for that
+  warning and refuses nothing on this ground.
 - **The §8 body-size figure predates §8.5.** The 1 555 bytes of the largest legal body were
   measured for the v1 review of 2026-09-13 with twelve-digit principals, and the independent
   review of 2026-10-19 measured 1 558 bytes for the same body with a compact serialization.
@@ -1174,9 +1189,10 @@ Prompt v1 does not change. Candidate lines for v2, as a new file:
 | S6. B = 24 000 ms, R = 4 163 ms, thresholds fixed before measurement (§8, §8.6) | B strictly below the 25 s Lambda timeout, with 1 s outside the handler's budget; R the stored p95 of 4 113 ms plus the 50 ms verification threshold. Every model call's deadline is the smaller of 20 s and B minus the elapsed time minus that threshold, so no call runs past B − 50 ms and the handler answers by B when verification stays within that threshold. Overhead at most 50 ms at p95 in tests; paid-run p95 of the no-retry path at most 6 000 ms, about 1,5× the stored p95, because model latency varies by day and 24 samples are few. 2 × p95, about 8,2 s, is an alert level, not a done criterion. |
 | S7. §8.5: a limit is re-measured before it is raised; market context dated 2026-10-23; the 2^53 crossing computed | The 3 650-day limit is an arithmetic bound about 1,3× the longest offer found, Davivienda's 2 880 days. The four-year term is written as Banco Popular publishes it, 1 440 days; a 365-day conversion is not written because no official page states it. Eleven institutions' own product pages, simulators or rate sheets were read on 2026-10-23; the stated maximum CDT terms: Davivienda 2 880 days (its simulator; its CDT Móvil page says 1 800), Banco Popular 1 440 days (four years), Bancolombia five years in prose and 1 799 days in its rate table, BBVA 36 months (one verbatim read; a second fetch was blocked), Banco de Bogotá 999 days in one section of its page and 720 in another, Coltefinanciera 900 days on its product page and two years in a FAQ, Banco Santander 720, Koa 24 months in its requirements and 36 in a FAQ and its rate table, Banco W 360 for its digital CDT and no maximum for its other CDTs, Pibank 360, and Banco Unión states no maximum; where a page states two figures, both are written; the second figures of Coltefinanciera and Koa, present in the 2026-10-23 copies, were noticed on 2026-10-24. Crossing at 3 440 days on base 360 and 3 488 on base 365 by the engine's formula. |
 | S8. §12 names the reader-facing cost that S1 closes | A warning on a failed reply hands the reader a possibly invented figure with a label they may ignore; hence 502 and never a warning. |
+| S9. Entity names that §11.2 compares as equal share their spans (§11.2 step 3, §11.5) (added 2026-10-27) | Two entities whose normalized names compare equal under `toLocaleLowerCase('es')`, such as "Banco" and "BANCO", could leave a rule no reply satisfies. §11.2 records the spans under the name it searches first, so when a rule names the other entity, the request never ends in 200; the measured cases depended on which entity holds a rung, not on the order of the request's `entities`, because names of equal length were ordered by `localeCompare`, whose order depends on the host's locale. Step 3 now credits the spans to both, as §11.5 already defines the rule: a case-insensitive substring of the normalized name. No stored verdict changes: 0 of 24 replies, and 0 of 10 fixtures have such names. So nothing is loosened for an evaluation run. Rejected: refusing such a request, because the engine accepts the names, the frontend only warns, and the API would own a validation rule the engine lacks (§7.2). Also rejected: leaving it as a known limitation, which answers a 502 that blames the service for the input. |
 | SPEC version 1.2; `evals/cases.json` version stays 1; the engine pin is unchanged | No input, rule list or budget changed, and the §2.2 block is byte-identical. |
 
-### Owed to 4B-code (2026-10-24)
+### Owed to 4B-code (2026-10-24, revised 2026-10-27)
 
 Stated as obligations, not designed here:
 
@@ -1191,20 +1207,29 @@ Stated as obligations, not designed here:
 - The range stage of §8.5 in the pipeline, giving the order cap, json, schema, engine, range,
   asOfDate.
 - The derivation function of §11.12.
-- Two entities whose raw names differ but are equal after N and lowercasing: §11.2 gives every
-  match to one of them, so the other's `mentions_entity` rule fails on every reply and the
-  request would end in 502 on every call; no fixture is in this class. 4B-code settles it before
-  the paid run, by refusing such a request as invalid input or by deriving one rule per distinct
-  normalized name with the scanner keyed the same way, and the SPEC revision that follows
-  records the choice.
-- The handler tests that assert 200 mock a reply that fails the derived set of their case; each
-  needs a reply that passes verification, for instance a stored reply of the v1 run.
+- §11.2 in `src/rules/entities.ts`: names of equal length in the order of the request's
+  `entities`, not by `localeCompare`, whose order depends on the host's locale
+  (`entities.ts:27`); and step 3 credits a span to every entity whose normalized name compares
+  equal under `toLocaleLowerCase('es')`. No fixture has two such names.
+- The handler tests that mock a reply failing the derived set of their case while asserting a
+  200, the reply's text or one model call per request (for instance
+  `src/handler.test.ts:220-240`, `:276-291` and `:755-775`) each need a reply that passes
+  verification, for instance a stored reply of the v1 run. The harness tests at
+  `src/eval/run.test.ts:129-158` drive the real handler with a reply that fails
+  `numbers_subset_of_input` and assert evidence that only a 200 produces; under §7.4 that
+  request ends in 502, so they are rewritten on a premise that holds.
 - The harness records per run, from the handler's log line, whether a verification retry
   happened, so the no-retry population of §8.6 can be selected from `results.json`.
 - The log-line test that every value on a 200 is an id, a hash, a number or null
   (`src/handler.test.ts:769-773`) admits the §8.4 verification entries on a 200 reached after a
   retry: rule names are constants of §11, not request data; the key and its encoding are
-  4B-code's to name.
+  4B-code's to name and so is its position among the keys, with `requestId` kept first because
+  `src/eval/suite.ts:168` finds the line by it. The entries are on a line only when a reply
+  failed verification (§8.4), so the assertions that pin a line's key array in order for lines
+  without them (`src/handler.test.ts:178` in the helper `expectKeys` and its calls, and the
+  inline pins at `:536`, `:664` and `:724`) stay as they are. The harness reads whether a retry
+  happened from that same key, and the SPEC revision that follows records it with every other
+  key of the line.
 - The tests at four locations that encode v1 readings superseded by v1.1, together with the
   patterns of `src/rules/rules.ts` that those tests pin, rewritten to the readings that
   supersede them: `src/rules/rules.test.ts:73-76` (§11.3 step 4, `-$`), `:95-104` (step 3, the
