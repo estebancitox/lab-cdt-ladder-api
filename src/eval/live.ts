@@ -32,8 +32,9 @@ async function main(): Promise<number> {
       startedAt,
       onRun: (r) => {
         const failed = r.verdicts.filter((v) => !v.pass).length
+        const retry = r.verificationRetry ? ', verification retry' : ''
         console.error(
-          `${r.caseId} run ${r.run}: status ${r.status}, ${r.calls} call(s), ${r.inputTokens ?? '-'} in / ${r.outputTokens ?? '-'} out, ${r.latencyMs ?? '-'} ms, ${failed} rule(s) failed`,
+          `${r.caseId} run ${r.run}: status ${r.status}, ${r.calls} call(s)${retry}, ${r.inputTokens ?? '-'} in / ${r.outputTokens ?? '-'} out, ${r.latencyMs ?? '-'} ms, ${failed} rule(s) failed`,
         )
       },
     })

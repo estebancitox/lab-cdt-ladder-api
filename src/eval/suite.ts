@@ -37,6 +37,17 @@ export interface RunRecord {
   outputTokens: number | null
   latencyMs: number | null
   costUsd: number | null
+  /**
+   * SPEC §8.4, from the handler's log line: the distinct failed rule names of each reply
+   * evaluated, [] when no reply failed verification, null when no line was captured. Absent
+   * from runs recorded before 4B-code.
+   */
+  failedRules?: string[][] | null
+  /**
+   * SPEC §8.6: whether a verification retry was made, from the same line, so the runs answered
+   * 200 without one can be selected; null when no line was captured.
+   */
+  verificationRetry?: boolean | null
   /** The reply, or the refusal body's text; null when the body had none. */
   text: string | null
   verdicts: Verdict[]
@@ -114,6 +125,7 @@ export async function runSuite(
         outputTokens: tokens?.output ?? null,
         latencyMs: typeof line?.latencyMs === 'number' ? line.latencyMs : null,
         costUsd: tokens ? costUsd(tokens.input, tokens.output) : null,
+        ...verificationOf(line, response.statusCode),
         text,
         verdicts,
       }
@@ -186,6 +198,22 @@ function parseBody(body: string): { text?: unknown } | null {
   } catch {
     return null
   }
+}
+
+/**
+ * The line carries `failedRules` only when a reply failed verification, one entry per reply
+ * evaluated. Two entries mean a retry was made. One entry means one was made unless the request
+ * ended in 502: a retry that failed upstream, or threw, leaves no reply to evaluate, so its 503
+ * or 500 carries one entry too, as a 502 without a retry does.
+ */
+function verificationOf(
+  line: Record<string, unknown> | null,
+  status: number,
+): { failedRules: string[][] | null; verificationRetry: boolean | null } {
+  if (!line) return { failedRules: null, verificationRetry: null }
+  const entries = Array.isArray(line.failedRules) ? (line.failedRules as string[][]) : []
+  const retried = entries.length === 2 || (entries.length === 1 && status !== 502)
+  return { failedRules: entries, verificationRetry: retried }
 }
 
 function tokensOf(line: Record<string, unknown> | null): { input: number; output: number } | null {

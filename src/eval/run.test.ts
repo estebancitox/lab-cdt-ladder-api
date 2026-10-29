@@ -28,10 +28,18 @@ let counterModule: typeof import('./fetch-counter')
 let apiRequests: { url: string; body: unknown }[]
 let counter: FetchCounter
 
-function fakeApi(text: string, usage = { input_tokens: 3041, output_tokens: 261 }): typeof fetch {
+/** Answers each call with the next of `texts`, the last one repeated. */
+function fakeApi(
+  texts: string | string[],
+  usage = { input_tokens: 3041, output_tokens: 261 },
+): typeof fetch {
+  const replies = Array.isArray(texts) ? texts : [texts]
+  let served = 0
   return async (input, init) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
     apiRequests.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null })
+    const text = replies[Math.min(served, replies.length - 1)]
+    served += 1
     const message = {
       id: 'msg_test',
       type: 'message',
@@ -113,6 +121,8 @@ describe('a valid case through the runner', () => {
         calls: 1,
         inputTokens: 3041,
         outputTokens: 261,
+        failedRules: [],
+        verificationRetry: false,
         text: REPLY,
       })
       expect(r.costUsd).toBeCloseTo(0.008692, 9)
@@ -145,6 +155,8 @@ describe('a valid case through the runner', () => {
       calls: 2,
       inputTokens: 3041 * 2,
       outputTokens: 261 * 2,
+      failedRules: [['numbers_subset_of_input'], ['numbers_subset_of_input']],
+      verificationRetry: true,
       text: UPSTREAM_MESSAGE,
     })
     expect(result.runs[0].costUsd).toBeCloseTo(0.008692 * 2, 9)
@@ -173,6 +185,98 @@ describe('a valid case through the runner', () => {
     expect(report).toContain('status 502 · 2 model calls · 6082 in / 522 out')
     expect(report).toContain(`> ${UPSTREAM_MESSAGE}`)
     expect(report).not.toContain('Tu escalera tiene $ 50.000.001')
+  })
+})
+
+describe("the verification retry, recorded from the handler's log line (SPEC §8.6)", () => {
+  it('a 200 reached after a retry: two calls, both spends, the reply that passed', async () => {
+    vi.stubGlobal('fetch', fakeApi([REPLY.replace('$ 50.000.000', '$ 50.000.001'), REPLY]))
+    counter.uninstall()
+    counter = counterModule.installFetchCounter()
+    const result = await suite.runSuite([caseById('healthy-3-rung')], {
+      runs: 1,
+      counter,
+      startedAt: 't',
+    })
+    expect(result.runs[0]).toMatchObject({
+      status: 200,
+      calls: 2,
+      inputTokens: 3041 * 2,
+      outputTokens: 261 * 2,
+      failedRules: [['numbers_subset_of_input'], []],
+      verificationRetry: true,
+      text: REPLY,
+    })
+    expect(result.runs[0].verdicts.filter((v) => !v.pass)).toEqual([])
+  })
+
+  // The handler's line, as each outcome writes it; `calls` model calls are made first.
+  async function recorded(status: number, failedRules: string[][] | undefined, calls: number) {
+    const invoke = async () => {
+      for (let i = 0; i < calls; i += 1) {
+        await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', body: '{}' })
+      }
+      const line = {
+        requestId: 'x',
+        bodyHash: 'h',
+        bodyBytes: 1,
+        rungCount: 3,
+        entityCount: 3,
+        status,
+        latencyMs: 1,
+        inputTokens: 10,
+        outputTokens: 5,
+        ...(failedRules === undefined ? {} : { failedRules }),
+      }
+      process.stdout.write(JSON.stringify(line) + '\n')
+      const text = status === 200 ? REPLY : UPSTREAM_MESSAGE
+      return { statusCode: status, headers: {}, body: JSON.stringify({ text }) }
+    }
+    const result = await suite.runSuite([caseById('healthy-3-rung')], {
+      runs: 1,
+      counter,
+      startedAt: 't',
+      invoke,
+    })
+    return result.runs[0]
+  }
+
+  it.each([
+    ['a 200 on the first reply', 200, undefined, 1, [], false],
+    ['a 502 with no time for a retry', 502, [['max_words']], 1, [['max_words']], false],
+    ['a 503 after a retry that failed upstream', 503, [['max_words']], 2, [['max_words']], true],
+    ['a 500 after a retry that threw', 500, [['max_words']], 2, [['max_words']], true],
+    ['a 200 after a retry', 200, [['max_words'], []], 2, [['max_words'], []], true],
+    [
+      'a 502 after a retry',
+      502,
+      [['max_words'], ['language_es']],
+      2,
+      [['max_words'], ['language_es']],
+      true,
+    ],
+  ] as const)('%s', async (_, status, line, calls, failedRules, verificationRetry) => {
+    const run = await recorded(
+      status,
+      line?.map((entry) => [...entry]),
+      calls,
+    )
+    expect(run).toMatchObject({ status, calls, failedRules, verificationRetry })
+  })
+
+  it('a run with no log line records neither', async () => {
+    const invoke = async () => ({
+      statusCode: 503,
+      headers: {},
+      body: JSON.stringify({ text: UPSTREAM_MESSAGE }),
+    })
+    const result = await suite.runSuite([caseById('healthy-3-rung')], {
+      runs: 1,
+      counter,
+      startedAt: 't',
+      invoke,
+    })
+    expect(result.runs[0]).toMatchObject({ failedRules: null, verificationRetry: null })
   })
 })
 
