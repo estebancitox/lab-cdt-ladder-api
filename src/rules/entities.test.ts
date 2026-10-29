@@ -56,4 +56,56 @@ describe('SPEC §11.2 entity spans E', () => {
     const text = normalize('nada')
     expect(entitySpans(text, ['   '])).toEqual(new Map([['   ', []]]))
   })
+
+  it('names of equal length are searched in the request order, not alphabetically', () => {
+    const text = normalize('Banco Sur Banco')
+    const taken = (names: string[]) =>
+      [...entitySpans(text, names)].filter(([, s]) => s.length > 0).map(([name]) => name)
+    expect(taken(['Sur Banco', 'Banco Sur'])).toEqual(['Sur Banco'])
+    expect(taken(['Banco Sur', 'Sur Banco'])).toEqual(['Banco Sur'])
+  })
+
+  it('length is counted after N: a longer raw name that normalizes shorter is searched later', () => {
+    const text = normalize('Banco Andino')
+    const spans = entitySpans(text, ['**Banco Andin**', 'Banco Andino'])
+    expect(spans.get('Banco Andino')).toHaveLength(1)
+    expect(spans.get('**Banco Andin**')).toHaveLength(0)
+  })
+})
+
+describe('SPEC §11.2 step 3: names that compare equal share their spans', () => {
+  it('credits every entity whose normalized name is equal under toLocaleLowerCase(es)', () => {
+    const names = ['Banco', 'BANCO']
+    const text = normalize('El peldaño 1 está en banco.')
+    const spans = entitySpans(text, names)
+    expect(spans.get('Banco')).toHaveLength(1)
+    expect(spans.get('BANCO')).toHaveLength(0)
+    expect(mentionsEntity(spans, 'Banco')).toBe(true)
+    expect(mentionsEntity(spans, 'BANCO')).toBe(true)
+  })
+
+  it('compares after N: spacing and asterisks do not tell names apart', () => {
+    const names = ['Banco Andino', 'Banco  Andino', '**Banco** Andino']
+    const spans = entitySpans(normalize('Vence en Banco Andino.'), names)
+    for (const name of names) expect(mentionsEntity(spans, name)).toBe(true)
+  })
+
+  it('identical names: the one Map entry holds the span and both rules pass', () => {
+    const spans = entitySpans(normalize('Vence en Banco.'), ['Banco', 'Banco'])
+    expect(spans.get('Banco')).toHaveLength(1)
+    expect(mentionsEntity(spans, 'Banco')).toBe(true)
+  })
+
+  it('does not credit a name that is merely contained in, or contains, the one named', () => {
+    const names = ['Banco Andino', 'Banco']
+    const spans = entitySpans(normalize('Vence en Banco Andino.'), names)
+    expect(mentionsEntity(spans, 'Banco Andino')).toBe(true)
+    expect(mentionsEntity(spans, 'Banco')).toBe(false)
+  })
+
+  it('an empty normalized name is never credited, even beside another empty name', () => {
+    const spans = entitySpans(normalize('Vence en Banco.'), ['**', '__', 'Banco'])
+    expect(mentionsEntity(spans, '**')).toBe(false)
+    expect(mentionsEntity(spans, '__')).toBe(false)
+  })
 })

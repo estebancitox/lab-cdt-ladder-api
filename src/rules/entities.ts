@@ -13,8 +13,9 @@ export const MASK = '«ENTIDAD»'
 /**
  * SPEC §11.2 steps 1 and 2: every normalized name is searched in the normalized text under
  * `toLocaleLowerCase('es')`, longest name first so a short name that is a prefix of a longer
- * one does not steal the span. A match that overlaps a span already recorded is skipped. The
- * result maps each raw entity name to its spans, possibly none.
+ * one does not steal the span. Length is UTF-16 code units after N, and names of equal length
+ * keep the request's order, which the stable sort preserves. A match that overlaps a span
+ * already recorded is skipped. The result maps each raw entity name to its spans, possibly none.
  */
 export function entitySpans(
   normalizedText: string,
@@ -23,11 +24,9 @@ export function entitySpans(
   const spans = new Map<string, EntitySpan[]>(entityNames.map((name) => [name, []]))
   const { lowered, offsets } = lowerWithOffsets(normalizedText)
   const taken: [number, number][] = []
-  const byLength = [...entityNames].sort(
-    (a, b) => normalize(b).length - normalize(a).length || a.localeCompare(b),
-  )
+  const byLength = [...entityNames].sort((a, b) => normalize(b).length - normalize(a).length)
   for (const name of byLength) {
-    const needle = normalize(name).toLocaleLowerCase('es')
+    const needle = searchKey(name)
     if (needle === '') continue
     let from = 0
     for (;;) {
@@ -44,9 +43,22 @@ export function entitySpans(
   return spans
 }
 
-/** SPEC §11.2 step 3 (§11.5): at least one span was recorded for the entity. */
+/**
+ * SPEC §11.2 step 3 (§11.5): at least one span was recorded for the entity, or for another whose
+ * normalized name compares equal to its own under `toLocaleLowerCase('es')`. Such names cannot be
+ * told apart by a substring, so the span recorded under the one searched first credits both.
+ */
 export function mentionsEntity(spans: Map<string, EntitySpan[]>, name: string): boolean {
-  return (spans.get(name)?.length ?? 0) > 0
+  const key = searchKey(name)
+  for (const [other, recorded] of spans) {
+    if (recorded.length > 0 && searchKey(other) === key) return true
+  }
+  return false
+}
+
+/** SPEC §11.2: a name as it is searched and compared, N then `toLocaleLowerCase('es')`. */
+function searchKey(name: string): string {
+  return normalize(name).toLocaleLowerCase('es')
 }
 
 /** SPEC §11.2 step 4: the normalized text with every recorded span replaced by MASK. */
