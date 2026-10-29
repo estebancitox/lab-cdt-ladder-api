@@ -27,6 +27,12 @@ const MONTHS = 'ene|feb|mar|abr|may|jun|jul|ago|sep|sept|oct|nov|dic'
 const ISO_DATE = /\d{4}-\d{2}-\d{2}/g
 const DAY_MONTH_YEAR = new RegExp(`\\b\\d{1,2}( de)? (${MONTHS})[a-zé]*( de)? \\d{4}\\b`, 'g')
 const MONTH_ALONE = new RegExp(`\\b(${MONTHS})[a-zé]*( de)? \\d{4}\\b`, 'g')
+/**
+ * SPEC §11.3 step 3, the day-and-month form without a year, verbatim: exactly D's `1 de junio`
+ * rendering. It runs on what the forms with a year leave.
+ */
+export const DAY_MONTH =
+  /\b\d{1,2} de (enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\b/g
 /** SPEC §11.3 step 5 and §11.3 step 1: the numeric token extractor. */
 const NUMERIC_TOKEN = /\d[\d.]*(,\d+)?/g
 
@@ -65,30 +71,35 @@ export function numbersSubsetOfInput(masked: string, truth: GroundTruth): Verdic
   const rule = 'numbers_subset_of_input'
   let text = fold(masked)
   // Step 3: date-shaped substrings, longest form first, each a member of D.
-  for (const pattern of [ISO_DATE, DAY_MONTH_YEAR, MONTH_ALONE]) {
+  for (const pattern of [ISO_DATE, DAY_MONTH_YEAR, MONTH_ALONE, DAY_MONTH]) {
     const invented = [...text.matchAll(pattern)].map((m) => m[0]).filter((s) => !truth.dates.has(s))
     if (invented.length > 0) {
       return { rule, pass: false, evidence: `invented date: ${invented.join(', ')}` }
     }
     text = text.replace(pattern, ' ')
   }
-  // Step 4: no `-` immediately before a digit.
-  const negative = /-\d[\d.,]*/.exec(text)
-  if (negative) return { rule, pass: false, evidence: `minus before a digit: ${negative[0]}` }
-  // Steps 5 and 6: every remaining numeric token, normalized, is a member of A.
+  // Step 4: no `-` immediately before a digit, or before a `$` a digit immediately follows.
+  const negative = /-(\$?)\d[\d.,]*/.exec(text)
+  if (negative) {
+    const before = negative[1] === '' ? 'a digit' : 'a $ and a digit'
+    return { rule, pass: false, evidence: `minus before ${before}: ${negative[0]}` }
+  }
+  // Steps 5 and 6: every remaining numeric token, its trailing periods deleted and normalized,
+  // is a member of A. The evidence quotes the token as the text has it.
   const offenders: string[] = []
-  for (const [token] of text.matchAll(NUMERIC_TOKEN)) {
+  for (const [raw] of text.matchAll(NUMERIC_TOKEN)) {
+    const token = raw.replace(/\.+$/, '')
     let value: number
     if (/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(token)) {
       value = Number(token.replace(/\./g, '').replace(',', '.'))
     } else if (/^\d+,\d+$/.test(token)) {
       value = Number(token.replace(',', '.'))
     } else if (/^\d+\.\d+$/.test(token)) {
-      return { rule, pass: false, evidence: `English decimal: ${token}` }
+      return { rule, pass: false, evidence: `English decimal: ${raw}` }
     } else {
       value = Number(token.replace(/\D/g, ''))
     }
-    if (!truth.allowed.has(value)) offenders.push(`${token} → ${value}`)
+    if (!truth.allowed.has(value)) offenders.push(`${raw} → ${value}`)
   }
   if (offenders.length > 0)
     return { rule, pass: false, evidence: `not in A: ${offenders.join(', ')}` }

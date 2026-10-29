@@ -13,6 +13,7 @@ import { groundTruthFrom } from './ground-truth'
 import { normalize } from './normalize'
 import {
   ADVICE,
+  DAY_MONTH,
   ENGLISH_WORDS,
   SPANISH_WORDS,
   errorMessageExact,
@@ -70,9 +71,14 @@ describe('SPEC §11.3 numbers_subset_of_input', () => {
     expect(run('Quedan -90 días.').evidence).toBe('minus before a digit: -90')
   })
 
-  it('a minus before the currency symbol is not caught by step 4 (SPEC §12 records this); only A decides', () => {
-    // 16.000 is the headroom of another case, not a figure of case 1, so A fails it here.
-    expect(run('Te faltan -$ 16.000 para el tope.').evidence).toBe('not in A: 16.000 → 16000')
+  it('fails a minus immediately before a $ that a digit follows, the formatter\'s negative form', () => {
+    // `-$ 16.000` is already `-$16.000` by step 8 of N when step 4 runs.
+    expect(run('Te faltan -$ 16.000 para el tope.')).toMatchObject({
+      pass: false,
+      evidence: 'minus before a $ and a digit: -$16.000',
+    })
+    // The three characters must be adjacent: a spaced dash is punctuation, and A decides.
+    expect(run('Capital - $ 50.000.000 en total.').pass).toBe(true)
   })
 
   it('fails an English decimal', () => {
@@ -92,20 +98,48 @@ describe('SPEC §11.3 numbers_subset_of_input', () => {
     expect(run('Todo vence en 2027.').pass).toBe(false)
   })
 
-  it('the day of a month-and-day date without a year falls through to the number check (plan decision 1)', () => {
-    // `1 de junio` is in D, but step 3's pattern needs a year: the day is checked as a number.
+  it('a day-and-month date without a year is consumed when it is in D', () => {
+    // 11 is not in A for this case: only the date form lets the day through.
     const truth = truthOf(caseById('clustered-maturities').input)
     expect(truth.dates.has('11 de junio')).toBe(true)
+    expect(truth.allowed.has(11)).toBe(false)
     const v = numbersSubsetOfInput(
       maskedOf('Vencen el 11 de junio y el 21 de junio de 2027.', truth),
       truth,
     )
-    expect(v).toMatchObject({ pass: false, evidence: 'not in A: 11 → 11' })
+    expect(v).toEqual({ rule: 'numbers_subset_of_input', pass: true })
   })
 
-  it('a trailing period stays in the token and the digits still parse (plan decision 6)', () => {
+  it('an invented day-and-month date without a year fails, even when its day is in A', () => {
+    expect(CASE_1.allowed.has(3)).toBe(true)
+    expect(CASE_1.dates.has('3 de mayo')).toBe(false)
+    expect(run('Vence el 3 de mayo.')).toMatchObject({
+      pass: false,
+      evidence: 'invented date: 3 de mayo',
+    })
+  })
+
+  it('the year-less form is D\'s `1 de junio` and nothing broader', () => {
+    // An abbreviated or de-less year-less form is not a date: its day is a number in A.
+    expect(CASE_1.dates.has('3 jul')).toBe(false)
+    expect(run('Vence el 3 jul.').pass).toBe(true)
+    expect(run('Son 3 de julioo.').pass).toBe(true)
+  })
+
+  it('the forms with a year are matched before the form without one', () => {
+    // Read year-less first, `1 de octubre` would leave `de 2027` and 2027 is not in A.
+    expect(CASE_1.allowed.has(2027)).toBe(false)
+    expect(run('Vence el 1 de octubre de 2027.').pass).toBe(true)
+  })
+
+  it('pins the year-less pattern to SPEC §11.3 step 3, verbatim', () => {
+    expect(SPEC_MD).toContain(`\`${DAY_MONTH.source}\``)
+  })
+
+  it('deletes every trailing period from a token before it is read (SPEC §11.3 step 5)', () => {
     expect(run('Retención de $ 129.572.').pass).toBe(true)
-    expect(run('Son 1.5.').evidence).toBe('not in A: 1.5. → 15')
+    expect(run('Retención de $ 129.572...').pass).toBe(true)
+    expect(run('Son 1.5.')).toMatchObject({ pass: false, evidence: 'English decimal: 1.5.' })
   })
 
   it('digits inside an entity name are masked away first', () => {
