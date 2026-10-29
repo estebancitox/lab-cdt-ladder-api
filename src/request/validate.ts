@@ -12,8 +12,12 @@ import { validateShape, type ExplainRequest } from './schema'
 /** SPEC §8: 8 KiB on the raw body, before parsing. Exactly 8192 bytes passes; 8193 does not. */
 export const MAX_BODY_BYTES = 8 * 1024
 
+/** SPEC §8.5: per-rung operator limits, both inclusive. */
+export const MAX_RUNG_DAYS = 3650
+export const MAX_RUNG_PRINCIPAL = 1e12
+
 /** Which stage refused the body. A stage sees the body only if every earlier one accepted it. */
-export type Stage = 'cap' | 'json' | 'schema' | 'engine' | 'asOfDate'
+export type Stage = 'cap' | 'json' | 'schema' | 'engine' | 'range' | 'asOfDate'
 
 export type ValidationOutcome =
   | { ok: true; request: ExplainRequest }
@@ -28,7 +32,8 @@ const utf8 = new TextDecoder('utf-8', { fatal: true })
  *   2. JSON parse;
  *   3. the draft-07 schema: shape, JSON types, resource bounds;
  *   4. the engine's validateScenario, its issues returned verbatim (§7.2);
- *   5. the API's two asOfDate rules, which the engine does not know about.
+ *   5. the per-rung range limits of §8.5, so an out-of-range rung never reaches the arithmetic;
+ *   6. the API's two asOfDate rules, which the engine does not know about.
  * Each stage returns only its own issues and later stages do not run. Content-Length is the
  * handler's concern; this function only sees bytes.
  */
@@ -64,10 +69,37 @@ export function validateRequest(raw: string | Uint8Array): ValidationOutcome {
     )
   }
 
+  const rangeIssues = checkRanges(request)
+  if (rangeIssues.length > 0) return refuse('range', 400, 'invalid_input', rangeIssues)
+
   const apiIssues = checkAsOfDate(request)
   if (apiIssues.length > 0) return refuse('asOfDate', 400, 'invalid_input', apiIssues)
 
   return { ok: true, request }
+}
+
+/** One issue per offending field of every offending rung, in the engine's field order. */
+function checkRanges(request: ExplainRequest): ApiIssue[] {
+  const issues: ApiIssue[] = []
+  request.ladder.rungs.forEach((rung, i) => {
+    if (rung.principal > MAX_RUNG_PRINCIPAL) {
+      issues.push({
+        source: 'api',
+        code: 'principal_out_of_range',
+        path: `rungs[${i}].principal`,
+        message: 'El monto no puede superar 1.000.000.000.000 pesos.',
+      })
+    }
+    if (rung.days > MAX_RUNG_DAYS) {
+      issues.push({
+        source: 'api',
+        code: 'days_out_of_range',
+        path: `rungs[${i}].days`,
+        message: 'El plazo no puede superar 3.650 días.',
+      })
+    }
+  })
+  return issues
 }
 
 function checkAsOfDate(request: ExplainRequest): ApiIssue[] {

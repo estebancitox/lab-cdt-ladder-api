@@ -9,7 +9,7 @@ import { CLIENT_OPTIONS, MAX_RETRIES, MAX_TOKENS, MODEL, MODEL_DEADLINE_MS } fro
 import { buildModelPayload } from './model/payload'
 import { SYSTEM_PROMPT_V1 } from './model/prompt.v1'
 import { ERROR_MESSAGE } from './request/errors'
-import { MAX_BODY_BYTES, validateRequest } from './request/validate'
+import { MAX_BODY_BYTES, MAX_RUNG_DAYS, validateRequest } from './request/validate'
 import { UPSTREAM_MESSAGE } from './response'
 import {
   SPEC_MD,
@@ -438,18 +438,37 @@ describe('rows 2 to 4: every 400 is ERROR_MESSAGE, invalid_input, and no model c
     expect(noEvent.line).toMatchObject({ bodyBytes: 0, requestId: null })
   })
 
-  it('a ladder the engine cannot compute, thrown from inside validateRequest', async () => {
+  it('a principal the engine cannot compute is refused by the range stage, before any arithmetic', async () => {
+    // Until §8.5 this ladder threw from inside validateRequest; the range stage now refuses it.
     const input = inputOf('single-rung-injected-name')
     Object.assign(input.ladder.rungs[0], { principal: Number.MAX_SAFE_INTEGER, ea: 1, days: 361 })
     const raw = JSON.stringify(input)
-    expect(() => validateRequest(raw)).toThrow(RangeError)
+    expect(validateRequest(raw)).toMatchObject({ ok: false, stage: 'range' })
     const { body } = await expectInvalid(post(raw))
-    expect(body.error.issues).toEqual([])
+    expect(body.error.issues.map((i: { code: string; path: string }) => [i.code, i.path])).toEqual([
+      ['principal_out_of_range', 'rungs[0].principal'],
+    ])
   })
 
-  it('a ladder the engine cannot date, thrown while the view is built', async () => {
+  it('a term the engine cannot date is refused by the range stage too', async () => {
     const input = inputOf('healthy-3-rung')
     Object.assign(input.ladder.rungs[1], { ea: 0, days: 3_000_000 })
+    const raw = JSON.stringify(input)
+    expect(validateRequest(raw)).toMatchObject({ ok: false, stage: 'range' })
+    const { body } = await expectInvalid(post(raw))
+    expect(body.error.issues.map((i: { code: string; path: string }) => [i.code, i.path])).toEqual([
+      ['days_out_of_range', 'rungs[1].days'],
+    ])
+  })
+
+  it('a ladder inside the limits the engine cannot date, thrown while the view is built', async () => {
+    // From a start in 9999, a 3650-day term matures in 10008, a five-digit year the engine's own
+    // date parser rejects. Sorted as a string it comes first, so asOfDate rule 2 compares
+    // against another rung's maturity and lets the request through to the view.
+    const input = inputOf('healthy-3-rung')
+    input.asOfDate = '9999-01-01'
+    input.ladder.startDate = '9999-01-01'
+    input.ladder.rungs[2].days = MAX_RUNG_DAYS
     const raw = JSON.stringify(input)
     const outcome = validateRequest(raw)
     expect(outcome.ok).toBe(true)

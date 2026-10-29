@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { addDays, validateScenario, type ScenarioInput } from '../engine'
 import {
+  SPEC_MD,
   VALID_CASES,
   bodyOf,
   caseById,
@@ -10,7 +11,7 @@ import {
 } from '../test-support/contract'
 import { ERROR_MESSAGE } from './errors'
 import { validateShape } from './schema'
-import { MAX_BODY_BYTES, validateRequest } from './validate'
+import { MAX_BODY_BYTES, MAX_RUNG_DAYS, MAX_RUNG_PRINCIPAL, validateRequest } from './validate'
 
 function refused(raw: string | Uint8Array) {
   const outcome = validateRequest(raw)
@@ -179,6 +180,163 @@ describe('criterion 5: the two asOfDate rules (SPEC §2.1)', () => {
     expect(validateRequest(JSON.stringify(body)).ok).toBe(true)
     body.asOfDate = '2026-12-01'
     expect(validateRequest(JSON.stringify(body)).ok).toBe(true)
+  })
+})
+
+describe('the per-rung range stage (SPEC §8.5)', () => {
+  const principalIssue = (i: number) => ({
+    source: 'api',
+    code: 'principal_out_of_range',
+    path: `rungs[${i}].principal`,
+    message: 'El monto no puede superar 1.000.000.000.000 pesos.',
+  })
+  const daysIssue = (i: number) => ({
+    source: 'api',
+    code: 'days_out_of_range',
+    path: `rungs[${i}].days`,
+    message: 'El plazo no puede superar 3.650 días.',
+  })
+
+  it('the limits are the SPEC §8 rows', () => {
+    expect(SPEC_MD).toContain('| Rung term `days` | at most 3650 |')
+    expect(SPEC_MD).toContain('| Rung `principal` | at most 1e12 pesos |')
+    expect(MAX_RUNG_DAYS).toBe(3650)
+    expect(MAX_RUNG_PRINCIPAL).toBe(1e12)
+  })
+
+  it('both limits are inclusive', () => {
+    const body = inputOf('healthy-3-rung')
+    Object.assign(body.ladder.rungs[0], { principal: MAX_RUNG_PRINCIPAL, days: MAX_RUNG_DAYS })
+    expect(validateRequest(JSON.stringify(body)).ok).toBe(true)
+  })
+
+  it('one over a limit is a 400 invalid_input at the range stage, in the API issue shape', () => {
+    const days = inputOf('healthy-3-rung')
+    days.ladder.rungs[1].days = MAX_RUNG_DAYS + 1
+    const byDays = refused(JSON.stringify(days))
+    expect(byDays.stage).toBe('range')
+    expect(byDays.status).toBe(400)
+    expect(byDays.body.error).toEqual({ code: 'invalid_input', issues: [daysIssue(1)] })
+    expectErrorMessageBytes(byDays.body.text)
+
+    const principal = inputOf('healthy-3-rung')
+    principal.ladder.rungs[0].principal = MAX_RUNG_PRINCIPAL + 1
+    const byPrincipal = refused(JSON.stringify(principal))
+    expect(byPrincipal.stage).toBe('range')
+    expect(byPrincipal.body.error).toEqual({ code: 'invalid_input', issues: [principalIssue(0)] })
+  })
+
+  it('one issue per offending field of every offending rung, in the engine field order', () => {
+    const body = inputOf('healthy-3-rung')
+    Object.assign(body.ladder.rungs[0], {
+      principal: MAX_RUNG_PRINCIPAL + 1,
+      days: MAX_RUNG_DAYS + 1,
+    })
+    body.ladder.rungs[2].days = MAX_RUNG_DAYS + 1
+    expect(refused(JSON.stringify(body)).body.error.issues).toEqual([
+      principalIssue(0),
+      daysIssue(0),
+      daysIssue(2),
+    ])
+  })
+
+  it('runs only when the engine stage returned no issues', () => {
+    const body = inputOf('healthy-3-rung')
+    body.ladder.rungs[0].principal = -1
+    body.ladder.rungs[1].days = MAX_RUNG_DAYS + 1
+    const outcome = refused(JSON.stringify(body))
+    expect(outcome.stage).toBe('engine')
+    expect(outcome.body.error.issues.map((i) => i.source)).toEqual(['engine'])
+  })
+
+  it('precedes both asOfDate rules, not only the one that calls computeScenario', () => {
+    const invalidDate = inputOf('healthy-3-rung')
+    invalidDate.ladder.rungs[0].days = MAX_RUNG_DAYS + 1
+    invalidDate.asOfDate = '2027-02-29'
+    expect(refused(JSON.stringify(invalidDate)).body.error.issues).toEqual([daysIssue(0)])
+
+    const afterLast = inputOf('healthy-3-rung')
+    afterLast.ladder.rungs[0].days = MAX_RUNG_DAYS + 1
+    afterLast.asOfDate = addDays(afterLast.ladder.startDate, MAX_RUNG_DAYS + 2)
+    expect(refused(JSON.stringify(afterLast)).body.error.issues).toEqual([daysIssue(0)])
+  })
+})
+
+describe('the largest legal body, re-measured with thirteen-digit principals (SPEC §8, §12)', () => {
+  // Every bound of §2.2 and §8.5 at its maximum: 12 rungs at 1e12 pesos, 6 entities, 8-character
+  // ids, 60-character names, compact JSON.stringify. The fiscal and rate values are free in the
+  // schema, so three figures are measured: ordinary values, the longest number spellings found,
+  // and names and ids of control characters, which serialize as six bytes each.
+  interface Variant {
+    label: string
+    char: string
+    ea: number
+    retencionRate: number
+    insuranceCeiling: number
+    bytes: number
+  }
+  function largest({ char, ea, retencionRate, insuranceCeiling }: Variant): RawRequest {
+    const id = (n: number) => char.repeat(8 - String(n).length) + String(n)
+    const entities = Array.from({ length: 6 }, (_, i) => ({
+      id: id(i),
+      name: char.repeat(59) + String(i),
+    }))
+    const rungs = Array.from({ length: 12 }, (_, i) => ({
+      id: id(i + 10),
+      principal: MAX_RUNG_PRINCIPAL,
+      days: MAX_RUNG_DAYS - i,
+      ea,
+      entityId: entities[i % 6].id,
+    }))
+    return {
+      asOfDate: '2027-01-04',
+      ladder: {
+        startDate: '2027-01-04',
+        dayCountBase: 365,
+        fiscal: { retencionRate, insuranceCeiling },
+        entities,
+        rungs,
+      },
+    }
+  }
+  // 24 characters as JSON.stringify writes it; the longest safe integer has 16 digits.
+  const LONGEST_RATE = 0.0000012345678901234567
+  const variants: Variant[] = [
+    {
+      label: 'ordinary values, ASCII names and ids',
+      char: 'N',
+      ea: 0.135,
+      retencionRate: 0.04,
+      insuranceCeiling: 50_000_000,
+      bytes: 1759,
+    },
+    {
+      label: 'the longest number spellings, ASCII names and ids',
+      char: 'N',
+      ea: LONGEST_RATE,
+      retencionRate: LONGEST_RATE,
+      insuranceCeiling: Number.MAX_SAFE_INTEGER,
+      bytes: 2015,
+    },
+    {
+      label: 'the longest number spellings, control-character names and ids',
+      char: '\u0001',
+      ea: LONGEST_RATE,
+      retencionRate: LONGEST_RATE,
+      insuranceCeiling: Number.MAX_SAFE_INTEGER,
+      bytes: 4775,
+    },
+  ]
+
+  it.each(variants)('$label', (variant) => {
+    const raw = JSON.stringify(largest(variant))
+    expect(String(MAX_RUNG_PRINCIPAL)).toHaveLength(13)
+    expect(String(LONGEST_RATE)).toHaveLength(24)
+    expect(validateRequest(raw).ok).toBe(true)
+    const bytes = Buffer.byteLength(raw)
+    console.info(`largest legal body, ${variant.label}: ${bytes} bytes of ${MAX_BODY_BYTES}`)
+    expect(bytes).toBe(variant.bytes)
+    expect(bytes).toBeLessThanOrEqual(MAX_BODY_BYTES)
   })
 })
 

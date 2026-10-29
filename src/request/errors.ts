@@ -24,10 +24,15 @@ export interface EngineIssue {
 }
 
 /**
- * The API's own rules: a body that is not JSON, and the two asOfDate rules of SPEC §2.1,
- * which the engine does not know about. Shapes fixed by plan decisions 2 and 3.
+ * The API's own rules: a body that is not JSON, the per-rung range limits of SPEC §8.5 and the
+ * two asOfDate rules of SPEC §2.1, which the engine does not know about. Shape of SPEC §7.3.
  */
-export type ApiIssueCode = 'invalid_json' | 'as_of_date_invalid' | 'as_of_date_after_last_maturity'
+export type ApiIssueCode =
+  | 'invalid_json'
+  | 'principal_out_of_range'
+  | 'days_out_of_range'
+  | 'as_of_date_invalid'
+  | 'as_of_date_after_last_maturity'
 
 export interface ApiIssue {
   source: 'api'
