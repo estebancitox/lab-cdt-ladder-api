@@ -56,9 +56,16 @@ export function mentionsEntity(spans: Map<string, EntitySpan[]>, name: string): 
   return false
 }
 
-/** SPEC §11.2: a name as it is searched and compared, N then `toLocaleLowerCase('es')`. */
+/**
+ * SPEC §11.2: a name as it is searched and compared, N then `toLocaleLowerCase('es')` applied
+ * code point by code point, exactly as lowerWithOffsets lowers the text. Lowering the whole
+ * string instead is context-sensitive (a final `Σ` becomes `ς`, a medial one `σ`), and a name
+ * copied verbatim into the reply would then not be found.
+ */
 function searchKey(name: string): string {
-  return normalize(name).toLocaleLowerCase('es')
+  let key = ''
+  for (const char of normalize(name)) key += char.toLocaleLowerCase('es')
+  return key
 }
 
 /** SPEC §11.2 step 4: the normalized text with every recorded span replaced by MASK. */

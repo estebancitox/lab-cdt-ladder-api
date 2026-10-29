@@ -265,22 +265,25 @@ describe('the per-rung range stage (SPEC §8.5)', () => {
 describe('the largest legal body, re-measured with thirteen-digit principals (SPEC §8, §12)', () => {
   // Every bound of §2.2 and §8.5 at its maximum: 12 rungs at 1e12 pesos, 6 entities, 8-character
   // ids, 60-character names, compact JSON.stringify. The fiscal and rate values are free in the
-  // schema, so three figures are measured: ordinary values, the longest number spellings found,
-  // and names and ids of control characters, which serialize as six bytes each.
+  // schema, so three figures are measured: ordinary values, the longest number spellings, and
+  // the maximum, with every character of every id and name written as a six-byte escape.
   interface Variant {
     label: string
-    char: string
+    escaped: boolean
     ea: number
     retencionRate: number
     insuranceCeiling: number
     bytes: number
   }
-  function largest({ char, ea, retencionRate, insuranceCeiling }: Variant): RawRequest {
-    const id = (n: number) => char.repeat(8 - String(n).length) + String(n)
-    const entities = Array.from({ length: 6 }, (_, i) => ({
-      id: id(i),
-      name: char.repeat(59) + String(i),
-    }))
+  /** Control characters JSON.stringify writes as `\u00XX`, six bytes; none is trimmed. */
+  const SIX_BYTE = Array.from({ length: 31 }, (_, i) => String.fromCharCode(i + 1)).filter(
+    (c) => JSON.stringify(c).length === 8 && c.trim() !== '',
+  )
+  function largest({ escaped, ea, retencionRate, insuranceCeiling }: Variant): RawRequest {
+    // Ids are distinct, as the engine requires; names need not be.
+    const id = (n: number) => (escaped ? SIX_BYTE[n].repeat(8) : String(n).padStart(8, 'N'))
+    const name = (n: number) => (escaped ? SIX_BYTE[n].repeat(60) : String(n).padStart(60, 'N'))
+    const entities = Array.from({ length: 6 }, (_, i) => ({ id: id(i), name: name(i) }))
     const rungs = Array.from({ length: 12 }, (_, i) => ({
       id: id(i + 10),
       principal: MAX_RUNG_PRINCIPAL,
@@ -299,12 +302,13 @@ describe('the largest legal body, re-measured with thirteen-digit principals (SP
       },
     }
   }
-  // 24 characters as JSON.stringify writes it; the longest safe integer has 16 digits.
+  // 24 characters as JSON.stringify writes it, the most a rate below 1 can take; the longest
+  // safe integer has 16 digits, and the engine refuses a negative ceiling.
   const LONGEST_RATE = 0.0000012345678901234567
   const variants: Variant[] = [
     {
       label: 'ordinary values, ASCII names and ids',
-      char: 'N',
+      escaped: false,
       ea: 0.135,
       retencionRate: 0.04,
       insuranceCeiling: 50_000_000,
@@ -312,19 +316,19 @@ describe('the largest legal body, re-measured with thirteen-digit principals (SP
     },
     {
       label: 'the longest number spellings, ASCII names and ids',
-      char: 'N',
+      escaped: false,
       ea: LONGEST_RATE,
       retencionRate: LONGEST_RATE,
       insuranceCeiling: Number.MAX_SAFE_INTEGER,
       bytes: 2015,
     },
     {
-      label: 'the longest number spellings, control-character names and ids',
-      char: '\u0001',
+      label: 'the maximum: the longest numbers, every id and name character a six-byte escape',
+      escaped: true,
       ea: LONGEST_RATE,
       retencionRate: LONGEST_RATE,
       insuranceCeiling: Number.MAX_SAFE_INTEGER,
-      bytes: 4775,
+      bytes: 5015,
     },
   ]
 
@@ -332,6 +336,7 @@ describe('the largest legal body, re-measured with thirteen-digit principals (SP
     const raw = JSON.stringify(largest(variant))
     expect(String(MAX_RUNG_PRINCIPAL)).toHaveLength(13)
     expect(String(LONGEST_RATE)).toHaveLength(24)
+    expect(SIX_BYTE.length).toBeGreaterThanOrEqual(22)
     expect(validateRequest(raw).ok).toBe(true)
     const bytes = Buffer.byteLength(raw)
     console.info(`largest legal body, ${variant.label}: ${bytes} bytes of ${MAX_BODY_BYTES}`)

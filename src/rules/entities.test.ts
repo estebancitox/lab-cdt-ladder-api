@@ -73,6 +73,19 @@ describe('SPEC §11.2 entity spans E', () => {
   })
 })
 
+describe('SPEC §11.2: a name and the text are lowercased the same way, character by character', () => {
+  it('a name copied verbatim is found even where lowercasing depends on context (final sigma)', () => {
+    // As a whole string the final Σ lowers to ς; character by character, as the text is, to σ.
+    const name = 'ΤΡΑΠΕΖΑΣ'
+    expect(name.toLocaleLowerCase('es').endsWith('ς')).toBe(true)
+    const text = normalize(`El peldaño 2 está en ${name} y vence pronto.`)
+    const spans = entitySpans(text, [name])
+    expect(spans.get(name)?.map((s) => text.slice(s.start, s.end))).toEqual([name])
+    expect(mentionsEntity(spans, name)).toBe(true)
+    expect(mask(text, spans)).toBe(`El peldaño 2 está en ${MASK} y vence pronto.`)
+  })
+})
+
 describe('SPEC §11.2 step 3: names that compare equal share their spans', () => {
   it('credits every entity whose normalized name is equal under toLocaleLowerCase(es)', () => {
     const names = ['Banco', 'BANCO']

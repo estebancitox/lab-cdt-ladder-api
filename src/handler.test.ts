@@ -888,6 +888,26 @@ describe('row 9: model reply failed verification → 502 verification_failed (SP
     }
   })
 
+  it('a retry that throws in this service is a 500 whose line still carries the failed reply', async () => {
+    // SPEC §8.4: the entries are logged whatever status the request ends in.
+    mocks.create
+      .mockResolvedValueOnce(reply(REPLY))
+      .mockResolvedValueOnce({ ...reply(PASSING), usage: undefined })
+    const response = await handler(post(CASE_1))
+    expect(response.statusCode).toBe(500)
+    expect(JSON.parse(response.body).error).toEqual({ code: 'internal_error', issues: [] })
+    expect(mocks.create).toHaveBeenCalledTimes(2)
+    const line = logLine()
+    expect(Object.keys(line)).toEqual([...BASE_KEYS, ...TOKEN_KEYS, 'failedRules', 'internalError'])
+    expect(line).toMatchObject({
+      status: 500,
+      inputTokens: 1742,
+      outputTokens: 251,
+      failedRules: [REPLY_FAILS],
+      internalError: 'TypeError',
+    })
+  })
+
   it('S9: "Banco" and "BANCO" both holding rungs, a reply that names one passes on one call', async () => {
     const input = inputOf('healthy-3-rung')
     input.ladder.entities[0].name = 'Banco'
@@ -958,7 +978,7 @@ describe('row 9: model reply failed verification → 502 verification_failed (SP
       expect(logLine()).toMatchObject({ latencyMs: 23_950, upstreamError: 'deadline' })
     })
 
-    it('a passing retry still answers by B: 200 at 23 950 ms with a retry that uses its whole deadline', async () => {
+    it('a passing retry still answers by B: 200 at 23 949 ms, the retry answering 1 ms before its deadline', async () => {
       vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
       mocks.create
         .mockImplementationOnce(answerAfter(19_837, reply(REPLY)))
