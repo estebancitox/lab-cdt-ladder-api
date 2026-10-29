@@ -17,6 +17,7 @@ export * from './types'
 export { normalize, fold } from './normalize'
 export { entitySpans, mask, mentionsEntity, MASK } from './entities'
 export { dateRenderings, groundTruthFrom, numberOfDisplay } from './ground-truth'
+export { deriveRules, productionMaxWords } from './derive'
 export * from './rules'
 
 /** SPEC §10: a rule value is split on the first colon only. */
@@ -66,6 +67,15 @@ export function evaluate(text: string, truth: GroundTruth, rules: readonly strin
         throw new Error(`unknown rule: ${spec.raw}`)
     }
   })
+}
+
+/**
+ * SPEC §7.4 and §8.4: the distinct names of the rules a reply failed, each the part of its rule
+ * string before the first colon, in the order of `verdicts`; for a derived set (§11.12) that is
+ * the table's row order. A name appears once however many rules carry it.
+ */
+export function failedRuleNames(verdicts: readonly Verdict[]): string[] {
+  return [...new Set(verdicts.filter((v) => !v.pass).map((v) => parseRuleSpec(v.rule).name))]
 }
 
 /** SPEC §11.11 for an invalid case: the raw response and the counted model calls. */

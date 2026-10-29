@@ -89,6 +89,35 @@ export function specErrorMessage(): string {
   return m[1]
 }
 
+/** The stored v1 run (SPEC §8.6), read-only: the source of replies known to pass verification. */
+export const STORED_RUN = 'evals/runs/2026-10-06T19-50-56Z'
+
+export interface StoredRun {
+  caseId: string
+  run: number
+  status: number
+  calls: number
+  inputTokens: number | null
+  outputTokens: number | null
+  latencyMs: number | null
+  text: string | null
+}
+
+export const STORED_RUNS: readonly StoredRun[] = (
+  JSON.parse(readFileSync(new URL(`${STORED_RUN}/results.json`, ROOT), 'utf8')) as {
+    runs: StoredRun[]
+  }
+).runs
+
+/** The reply the stored run holds for a valid case, run 1 by default. */
+export function storedReply(caseId: string, run = 1): string {
+  const found = STORED_RUNS.find((r) => r.caseId === caseId && r.run === run)
+  if (!found || found.status !== 200 || found.text === null) {
+    throw new Error(`no stored reply for ${caseId} run ${run} in ${STORED_RUN}`)
+  }
+  return found.text
+}
+
 /** The engine commit SPEC.md pins in its header. */
 export function specEnginePin(): string {
   const m = /engine pinned at `([0-9a-f]{40})`/.exec(SPEC_MD)

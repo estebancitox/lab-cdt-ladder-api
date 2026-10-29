@@ -71,7 +71,7 @@ describe('SPEC §11.3 numbers_subset_of_input', () => {
     expect(run('Quedan -90 días.').evidence).toBe('minus before a digit: -90')
   })
 
-  it('fails a minus immediately before a $ that a digit follows, the formatter\'s negative form', () => {
+  it("fails a minus immediately before a $ that a digit follows, the formatter's negative form", () => {
     // `-$ 16.000` is already `-$16.000` by step 8 of N when step 4 runs.
     expect(run('Te faltan -$ 16.000 para el tope.')).toMatchObject({
       pass: false,
@@ -119,7 +119,7 @@ describe('SPEC §11.3 numbers_subset_of_input', () => {
     })
   })
 
-  it('the year-less form is D\'s `1 de junio` and nothing broader', () => {
+  it("the year-less form is D's `1 de junio` and nothing broader", () => {
     // An abbreviated or de-less year-less form is not a date: its day is a number in A.
     expect(CASE_1.dates.has('3 jul')).toBe(false)
     expect(run('Vence el 3 jul.').pass).toBe(true)
