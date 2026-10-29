@@ -208,8 +208,10 @@ describe('the SPEC §7 table is the list of rows this file covers', () => {
       .map(([, condition, status, text, code]) => [condition, Number(status), text, code])
     expect(rows).toEqual([
       ['Body over the byte cap', 413, 'ERROR_MESSAGE', 'payload_too_large'],
+      ['Body that is not JSON (§7.3)', 400, 'ERROR_MESSAGE', 'invalid_input'],
       ['Schema violation', 400, 'ERROR_MESSAGE', 'invalid_input'],
       ['Engine validation failure', 400, 'ERROR_MESSAGE', 'invalid_input'],
+      ["A rung's days or principal over a §8.5 limit", 400, 'ERROR_MESSAGE', 'invalid_input'],
       ['asOfDate invalid or after the last maturity', 400, 'ERROR_MESSAGE', 'invalid_input'],
       [
         'Model unavailable, overloaded or timed out',
@@ -218,8 +220,17 @@ describe('the SPEC §7 table is the list of rows this file covers', () => {
         'upstream_unavailable',
       ],
       ['Model response truncated at max_tokens', 503, 'UPSTREAM_MESSAGE', 'upstream_truncated'],
+      [
+        'Model reply failed verification (§7.4), with no time for a retry or on the retry too',
+        502,
+        'UPSTREAM_MESSAGE',
+        'verification_failed',
+      ],
       ['Unexpected internal error', 500, 'UPSTREAM_MESSAGE', 'internal_error'],
     ])
+    // The rows pending 4B-code moved into this table: no second error table remains.
+    expect(SPEC_MD).not.toMatch(/^\| Condition, pending/m)
+    expect(SPEC_MD.match(/^\| Condition \| Status \|/gm)).toHaveLength(1)
   })
 
   it('UPSTREAM_MESSAGE equals the SPEC §7 fixed string byte for byte', () => {
@@ -429,7 +440,7 @@ describe('row 1: body over the byte cap → 413 payload_too_large', () => {
   })
 })
 
-describe('rows 2 to 4: every 400 is ERROR_MESSAGE, invalid_input, and no model call', () => {
+describe('rows 2 to 6: every 400 is ERROR_MESSAGE, invalid_input, and no model call', () => {
   async function expectInvalid(event: FunctionUrlEvent) {
     const response = await handler(event)
     expect(response.statusCode).toBe(400)
@@ -444,7 +455,7 @@ describe('rows 2 to 4: every 400 is ERROR_MESSAGE, invalid_input, and no model c
     return { body, line }
   }
 
-  it('row 2, schema violation: case 8 (missing-required-field)', async () => {
+  it('row 3, schema violation: case 8 (missing-required-field)', async () => {
     const { body, line } = await expectInvalid(post(bodyOf(caseById('missing-required-field'))))
     expect(body.error.issues).toEqual([
       { source: 'schema', keyword: 'required', path: '/ladder/rungs/0/ea' },
@@ -452,7 +463,7 @@ describe('rows 2 to 4: every 400 is ERROR_MESSAGE, invalid_input, and no model c
     expect(line).toMatchObject({ rungCount: null, entityCount: null, status: 400 })
   })
 
-  it('row 3, engine validation failure: case 9 (negative-amount), issues verbatim', async () => {
+  it('row 4, engine validation failure: case 9 (negative-amount), issues verbatim', async () => {
     const c = caseById('negative-amount')
     const { body } = await expectInvalid(post(bodyOf(c)))
     const fromEngine = validateScenario((c.input as RawRequest).ladder as unknown as ScenarioInput)
@@ -460,14 +471,14 @@ describe('rows 2 to 4: every 400 is ERROR_MESSAGE, invalid_input, and no model c
     expect(body.error.issues).toEqual(fromEngine.map((issue) => ({ source: 'engine', ...issue })))
   })
 
-  it('row 4, asOfDate that is not a calendar date', async () => {
+  it('row 6, asOfDate that is not a calendar date', async () => {
     const input = inputOf('healthy-3-rung')
     input.asOfDate = '2027-02-29'
     const { body } = await expectInvalid(post(JSON.stringify(input)))
     expect(body.error.issues.map((i: { code: string }) => i.code)).toEqual(['as_of_date_invalid'])
   })
 
-  it('row 4, asOfDate one day after the last maturity', async () => {
+  it('row 6, asOfDate one day after the last maturity', async () => {
     const input = inputOf('healthy-3-rung')
     const longestTerm = Math.max(...input.ladder.rungs.map((rung) => rung.days))
     input.asOfDate = addDays(input.ladder.startDate, longestTerm + 1)
@@ -477,7 +488,7 @@ describe('rows 2 to 4: every 400 is ERROR_MESSAGE, invalid_input, and no model c
     ])
   })
 
-  it('a body that is not JSON, a request with no body, and an invocation with no event', async () => {
+  it('row 2, a body that is not JSON, a request with no body, and an invocation with no event', async () => {
     const notJson = await expectInvalid(post('{not json'))
     expect(notJson.body.error.issues[0].code).toBe('invalid_json')
     written = []
@@ -490,7 +501,7 @@ describe('rows 2 to 4: every 400 is ERROR_MESSAGE, invalid_input, and no model c
     expect(noEvent.line).toMatchObject({ bodyBytes: 0, requestId: null })
   })
 
-  it('a principal the engine cannot compute is refused by the range stage, before any arithmetic', async () => {
+  it('row 5, a principal the engine cannot compute is refused by the range stage, before any arithmetic', async () => {
     // Until §8.5 this ladder threw from inside validateRequest; the range stage now refuses it.
     const input = inputOf('single-rung-injected-name')
     Object.assign(input.ladder.rungs[0], { principal: Number.MAX_SAFE_INTEGER, ea: 1, days: 361 })
@@ -502,7 +513,7 @@ describe('rows 2 to 4: every 400 is ERROR_MESSAGE, invalid_input, and no model c
     ])
   })
 
-  it('a term the engine cannot date is refused by the range stage too', async () => {
+  it('row 5, a term the engine cannot date is refused by the range stage too', async () => {
     const input = inputOf('healthy-3-rung')
     Object.assign(input.ladder.rungs[1], { ea: 0, days: 3_000_000 })
     const raw = JSON.stringify(input)
@@ -531,7 +542,7 @@ describe('rows 2 to 4: every 400 is ERROR_MESSAGE, invalid_input, and no model c
   })
 })
 
-describe('row 5: model unavailable, overloaded or timed out → 503 upstream_unavailable', () => {
+describe('row 7: model unavailable, overloaded or timed out → 503 upstream_unavailable', () => {
   async function expectUnavailable(event: FunctionUrlEvent, upstreamError: string) {
     const response = await handler(event)
     expect(response.statusCode).toBe(503)
@@ -716,7 +727,7 @@ describe('row 5: model unavailable, overloaded or timed out → 503 upstream_una
   })
 })
 
-describe('row 6: model response truncated at max_tokens → 503 upstream_truncated', () => {
+describe('row 8: model response truncated at max_tokens → 503 upstream_truncated', () => {
   it('returns the fixed string, never the partial text, and logs the tokens that were spent', async () => {
     const partial = 'Qué pasa y cuándo\n\nTu escalera tiene 3 peldaños que vencen el'
     mocks.create.mockResolvedValue(
@@ -742,7 +753,7 @@ describe('row 6: model response truncated at max_tokens → 503 upstream_truncat
   })
 })
 
-describe('model reply failed verification → 502 verification_failed (SPEC §7.4)', () => {
+describe('row 9: model reply failed verification → 502 verification_failed (SPEC §7.4)', () => {
   /** What case 1's derived set fails REPLY on, distinct names in §11.12 order (measured). */
   const REPLY_FAILS = ['mentions_every_rung', 'mentions_entity', 'language_es']
   const failureBody = (rules: string[]) => ({
@@ -961,7 +972,7 @@ describe('model reply failed verification → 502 verification_failed (SPEC §7.
   })
 })
 
-describe('row 7: unexpected internal error → 500 internal_error', () => {
+describe('row 10: unexpected internal error → 500 internal_error', () => {
   it('a defect is neither a refusal nor an outage, and its message is not logged', async () => {
     // A 200 the SDK parsed but whose usage is missing: reading it throws in this service.
     mocks.create.mockResolvedValue({ ...reply(REPLY), usage: undefined })

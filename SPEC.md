@@ -426,22 +426,15 @@ explanation would quietly satisfy every evaluation rule.
 | Condition | Status | `text` | `error.code` |
 |---|---|---|---|
 | Body over the byte cap | 413 | `ERROR_MESSAGE` | `payload_too_large` |
+| Body that is not JSON (§7.3) | 400 | `ERROR_MESSAGE` | `invalid_input` |
 | Schema violation | 400 | `ERROR_MESSAGE` | `invalid_input` |
 | Engine validation failure | 400 | `ERROR_MESSAGE` | `invalid_input` |
+| A rung's `days` or `principal` over a §8.5 limit | 400 | `ERROR_MESSAGE` | `invalid_input` |
 | `asOfDate` invalid or after the last maturity | 400 | `ERROR_MESSAGE` | `invalid_input` |
 | Model unavailable, overloaded or timed out | 503 | `UPSTREAM_MESSAGE` | `upstream_unavailable` |
 | Model response truncated at `max_tokens` | 503 | `UPSTREAM_MESSAGE` | `upstream_truncated` |
-| Unexpected internal error | 500 | `UPSTREAM_MESSAGE` | `internal_error` |
-
-The rows below are contract now; they move into the table above in 4B-code, in the same commit
-that extends the test pinning that table's rows (`src/handler.test.ts:181-204`), the one SPEC
-edit a code session makes.
-
-| Condition, pending 4B-code | Status | `text` | `error.code` |
-|---|---|---|---|
-| A rung's `days` or `principal` over a §8.5 limit | 400 | `ERROR_MESSAGE` | `invalid_input` |
-| Body that is not JSON (§7.3) | 400 | `ERROR_MESSAGE` | `invalid_input` |
 | Model reply failed verification (§7.4), with no time for a retry or on the retry too | 502 | `UPSTREAM_MESSAGE` | `verification_failed` |
+| Unexpected internal error | 500 | `UPSTREAM_MESSAGE` | `internal_error` |
 
 Fixed strings, byte-exact:
 
