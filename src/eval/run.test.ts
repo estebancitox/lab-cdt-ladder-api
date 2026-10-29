@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ERROR_MESSAGE } from '../request/errors'
+import { UPSTREAM_MESSAGE } from '../response'
 import { CASES, caseById } from '../test-support/contract'
 import type { FetchCounter } from './fetch-counter'
 
@@ -126,8 +127,12 @@ describe('a valid case through the runner', () => {
     expect(mocks.send).toHaveBeenCalledTimes(1)
   })
 
-  it('records a failing rule with its evidence', async () => {
-    vi.stubGlobal('fetch', fakeApi(REPLY.replace('$ 50.000.000', '$ 50.000.001')))
+  // A reply that fails numbers_subset_of_input never reaches the runner as a 200: the handler
+  // verifies it (SPEC §7.4), retries once, and answers 502 when the retry fails too.
+  const INVENTED = REPLY.replace('$ 50.000.000', '$ 50.000.001')
+
+  it('a reply failing verification twice is a 502 run: two calls, both spends, every rule failed on the status', async () => {
+    vi.stubGlobal('fetch', fakeApi(INVENTED))
     counter.uninstall()
     counter = counterModule.installFetchCounter()
     const result = await suite.runSuite([caseById('healthy-3-rung')], {
@@ -135,26 +140,39 @@ describe('a valid case through the runner', () => {
       counter,
       startedAt: 't',
     })
-    expect(result.runs[0].verdicts.filter((v) => !v.pass)).toEqual([
-      { rule: 'numbers_subset_of_input', pass: false, evidence: 'not in A: 50.000.001 → 50000001' },
-    ])
+    expect(result.runs[0]).toMatchObject({
+      status: 502,
+      calls: 2,
+      inputTokens: 3041 * 2,
+      outputTokens: 261 * 2,
+      text: UPSTREAM_MESSAGE,
+    })
+    expect(result.runs[0].costUsd).toBeCloseTo(0.008692 * 2, 9)
+    expect(result.runs[0].verdicts).toEqual(
+      caseById('healthy-3-rung').rules.map((rule) => ({
+        rule,
+        pass: false,
+        evidence: 'status 502',
+      })),
+    )
+    expect(apiRequests).toHaveLength(2)
   })
 
-  it('a failing rule reaches the report through the runner, with its evidence and an empty Classification cell', async () => {
-    vi.stubGlobal('fetch', fakeApi(REPLY.replace('$ 50.000.000', '$ 50.000.001')))
+  it('a 502 run reaches the report with its evidence, an empty Classification cell and no reply', async () => {
+    vi.stubGlobal('fetch', fakeApi(INVENTED))
     counter.uninstall()
     counter = counterModule.installFetchCounter()
     const { renderReport } = await import('./report')
     const cases = [caseById('healthy-3-rung')]
     const result = await suite.runSuite(cases, { runs: 1, counter, startedAt: 't' })
     const report = renderReport(result, cases)
-    expect(report).toContain('| 1 | healthy-3-rung | 1 | 9/10 |')
+    expect(report).toContain('| 1 | healthy-3-rung | 1 | 0/10 |')
     expect(report).toContain('| Rule | Run 1 | Classification |')
-    expect(report).toContain(
-      '| numbers_subset_of_input | FAIL: not in A: 50.000.001 → 50000001 |  |',
-    )
-    expect(report).toContain('| max_words:150 | pass |  |')
-    expect(report).toContain('> Tu escalera tiene $ 50.000.001')
+    expect(report).toContain('| numbers_subset_of_input | FAIL: status 502 |  |')
+    expect(report).toContain('| max_words:150 | FAIL: status 502 |  |')
+    expect(report).toContain('status 502 · 2 model calls · 6082 in / 522 out')
+    expect(report).toContain(`> ${UPSTREAM_MESSAGE}`)
+    expect(report).not.toContain('Tu escalera tiene $ 50.000.001')
   })
 })
 

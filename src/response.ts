@@ -11,6 +11,12 @@ export const UPSTREAM_MESSAGE =
 /** SPEC §7: the codes that exist only once validation has passed. */
 export type ServiceCode = 'upstream_unavailable' | 'upstream_truncated' | 'internal_error'
 
+/** SPEC §7.4: a verification issue names a rule, the part before its first colon, and no more. */
+export interface VerificationIssue {
+  source: 'verification'
+  rule: string
+}
+
 /** What a Lambda Function URL expects back (payload format 2.0). */
 export interface HttpResponse {
   statusCode: number
@@ -48,4 +54,13 @@ export function serviceFailure(code: ServiceCode): HttpResponse {
     text: UPSTREAM_MESSAGE,
     error: { code, issues },
   })
+}
+
+/**
+ * SPEC §7.4: 502 when the reply last evaluated failed verification and no retry remains. One
+ * issue per distinct failed rule name, in the order given, which is the §11.12 row order.
+ */
+export function verificationFailure(ruleNames: readonly string[]): HttpResponse {
+  const issues: VerificationIssue[] = ruleNames.map((rule) => ({ source: 'verification', rule }))
+  return json(502, { text: UPSTREAM_MESSAGE, error: { code: 'verification_failed', issues } })
 }

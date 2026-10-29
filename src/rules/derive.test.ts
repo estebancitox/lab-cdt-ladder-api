@@ -7,6 +7,8 @@ import {
   acceptedRequest,
   caseById,
   inputOf,
+  specRuleNames,
+  specTableRows,
   type RawRequest,
 } from '../test-support/contract'
 import { deriveRules, productionMaxWords } from './derive'
@@ -21,24 +23,7 @@ function prepared(input: unknown) {
 
 const namesOf = (rules: readonly string[]) => [...new Set(rules.map((r) => parseRuleSpec(r).name))]
 
-/** The body rows of the SPEC.md table under `header`, up to the first blank line, as cells. */
-function specTableRows(header: string): string[][] {
-  const at = SPEC_MD.indexOf(`${header}\n`)
-  if (at < 0) throw new Error(`table not found in SPEC.md: ${header}`)
-  const lines = SPEC_MD.slice(at).split('\n')
-  const end = lines.indexOf('')
-  return lines.slice(2, end).map((line) =>
-    line
-      .split('|')
-      .slice(1, -1)
-      .map((cell) => cell.trim()),
-  )
-}
-
-/** The rule names of §11.12's first column, row by row, left to right. */
-const TABLE_NAMES = specTableRows('| Rule | Argument and where it comes from | Applies |').flatMap(
-  ([rule]) => [...rule.matchAll(/`([a-z_]+)[^`]*`/g)].map((m) => m[1]),
-)
+const TABLE_NAMES = specRuleNames()
 const PRODUCTION_NAMES = TABLE_NAMES.filter((name) => name !== 'error_message_exact')
 
 const STORED_200 = STORED_RUNS.filter((r) => r.status === 200 && r.text !== null)

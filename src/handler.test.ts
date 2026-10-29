@@ -1,6 +1,14 @@
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  HANDLER_BUDGET_MS,
+  RETRY_THRESHOLD_MS,
+  STORED_P95_MS,
+  VERIFICATION_THRESHOLD_MS,
+  callDeadlineMs,
+  retryFits,
+} from './budget'
 import { addDays, validateScenario, type ScenarioInput } from './engine'
 import { buildExplanationView } from './explain'
 import type { FunctionUrlEvent } from './handler'
@@ -13,11 +21,15 @@ import { MAX_BODY_BYTES, MAX_RUNG_DAYS, validateRequest } from './request/valida
 import { UPSTREAM_MESSAGE } from './response'
 import {
   SPEC_MD,
+  STORED_RUNS,
   VALID_CASES,
   acceptedRequest,
   bodyOf,
   caseById,
   inputOf,
+  specJsonBlockAfter,
+  specRuleNames,
+  specTableRows,
   storedReply,
   type RawRequest,
 } from './test-support/contract'
@@ -261,6 +273,39 @@ describe('200: the explanation (SPEC §7.1)', () => {
     expect(MODEL_DEADLINE_MS).toBe(20_000)
     expect(KEY_FETCH_TIMEOUT_MS).toBe(3_000)
     expect(KEY_FETCH_TIMEOUT_MS + MODEL_DEADLINE_MS).toBeLessThan(Number(timeout[1]) * 1000)
+    // SPEC §8.6: B is strictly below the Lambda timeout.
+    expect(HANDLER_BUDGET_MS).toBeLessThan(Number(timeout[1]) * 1000)
+  })
+
+  it('B and R are the SPEC §8 rows, and R is the stored p95 plus the 50 ms threshold', () => {
+    const rows = specTableRows('| Limit | Value | Basis |')
+    const ms = (limit: string) => {
+      const row = rows.find(([name]) => name === limit)
+      if (!row) throw new Error(`no §8 row ${limit}`)
+      return Number(row[1].replace(/\s/g, '').replace(/ms$/, ''))
+    }
+    expect(ms('Handler budget B')).toBe(HANDLER_BUDGET_MS)
+    expect(ms('Retry threshold R')).toBe(RETRY_THRESHOLD_MS)
+    expect([HANDLER_BUDGET_MS, RETRY_THRESHOLD_MS, VERIFICATION_THRESHOLD_MS]).toEqual([
+      24_000, 4_163, 50,
+    ])
+    // The nearest-rank p95 of the 24 stored runs with a model call (SPEC §8.6).
+    const latencies = STORED_RUNS.filter((r) => r.calls > 0)
+      .map((r) => r.latencyMs as number)
+      .sort((a, b) => a - b)
+    expect(latencies).toHaveLength(24)
+    expect(latencies[Math.ceil(0.95 * latencies.length) - 1]).toBe(STORED_P95_MS)
+    expect(RETRY_THRESHOLD_MS).toBe(STORED_P95_MS + VERIFICATION_THRESHOLD_MS)
+  })
+
+  it("every call's deadline is min(20 s, B − elapsed − 50 ms), and a retry needs R of B left", () => {
+    expect(callDeadlineMs(0)).toBe(20_000)
+    expect(callDeadlineMs(3_950)).toBe(20_000)
+    expect(callDeadlineMs(3_960)).toBe(19_990)
+    expect(callDeadlineMs(19_837)).toBe(4_113)
+    expect(callDeadlineMs(19_837.4)).toBe(4_112)
+    expect(retryFits(HANDLER_BUDGET_MS - RETRY_THRESHOLD_MS)).toBe(true)
+    expect(retryFits(HANDLER_BUDGET_MS - RETRY_THRESHOLD_MS + 0.001)).toBe(false)
   })
 
   it.each([...VALID_CASES])('$id is explained', async (c) => {
@@ -697,6 +742,225 @@ describe('row 6: model response truncated at max_tokens → 503 upstream_truncat
   })
 })
 
+describe('model reply failed verification → 502 verification_failed (SPEC §7.4)', () => {
+  /** What case 1's derived set fails REPLY on, distinct names in §11.12 order (measured). */
+  const REPLY_FAILS = ['mentions_every_rung', 'mentions_entity', 'language_es']
+  const failureBody = (rules: string[]) => ({
+    text: UPSTREAM_MESSAGE,
+    error: {
+      code: 'verification_failed',
+      issues: rules.map((rule) => ({ source: 'verification', rule })),
+    },
+  })
+  const RETRY_USAGE = { input_tokens: 1800, output_tokens: 300 }
+
+  it('a failed reply is retried once; a passing retry answers 200 with its text and both spends', async () => {
+    mocks.create
+      .mockResolvedValueOnce(reply(REPLY))
+      .mockResolvedValueOnce(reply(PASSING, 'end_turn', RETRY_USAGE))
+    const response = await handler(post(CASE_1))
+    expect(response.statusCode).toBe(200)
+    expect(JSON.parse(response.body)).toEqual({ text: PASSING })
+    expect(mocks.create).toHaveBeenCalledTimes(2)
+    // The retry is the same request: a fresh sample, since no temperature is set.
+    expect(mocks.create.mock.calls[1][0]).toEqual(mocks.create.mock.calls[0][0])
+    const line = logLine()
+    expect(Object.keys(line)).toEqual([...BASE_KEYS, ...TOKEN_KEYS, 'failedRules'])
+    expect(line).toMatchObject({
+      status: 200,
+      inputTokens: 1742 + 1800,
+      outputTokens: 251 + 300,
+      failedRules: [REPLY_FAILS, []],
+    })
+  })
+
+  it('a retry that fails too ends in 502 with the names of the reply last evaluated', async () => {
+    const invented = PASSING.replace('$ 50.000.000', '$ 50.000.001')
+    mocks.create
+      .mockResolvedValueOnce(reply(REPLY))
+      .mockResolvedValueOnce(reply(invented, 'end_turn', RETRY_USAGE))
+    const response = await handler(post(CASE_1))
+    expect(response.statusCode).toBe(502)
+    expect(response.headers).toEqual(HEADERS)
+    const body = JSON.parse(response.body)
+    expectBytes(body.text, 'UPSTREAM_MESSAGE')
+    expect(body).toEqual(failureBody(['numbers_subset_of_input']))
+    // A reply that failed is never returned, not in part.
+    expect(response.body).not.toContain('Tu escalera')
+    const line = logLine()
+    expect(Object.keys(line)).toEqual([...BASE_KEYS, ...TOKEN_KEYS, 'failedRules'])
+    expect(line).toMatchObject({
+      status: 502,
+      inputTokens: 1742 + 1800,
+      outputTokens: 251 + 300,
+      failedRules: [REPLY_FAILS, ['numbers_subset_of_input']],
+    })
+    expect(written.join('')).not.toContain('Tu escalera')
+  })
+
+  it('one issue per distinct name: three failed mentions_entity rules are one issue, with no name', async () => {
+    mocks.create.mockResolvedValue(reply(REPLY))
+    const response = await handler(post(CASE_1))
+    expect(response.statusCode).toBe(502)
+    expect(JSON.parse(response.body)).toEqual(failureBody(REPLY_FAILS))
+    expect(logLine()).toMatchObject({ failedRules: [REPLY_FAILS, REPLY_FAILS] })
+    for (const entity of inputOf('healthy-3-rung').ladder.entities) {
+      expect(response.body).not.toContain(entity.name)
+      expect(written.join('')).not.toContain(entity.name)
+    }
+  })
+
+  it('the body equals the SPEC §7.1 verification block for the same two failed rules', async () => {
+    // Over the 150-word budget, with an English decimal: exactly the SPEC example's two rules.
+    const long = `${PASSING}\n\n${'palabra '.repeat(150)}1.5.`
+    mocks.create.mockResolvedValue(reply(long))
+    const response = await handler(post(CASE_1))
+    expect(response.statusCode).toBe(502)
+    expect(JSON.parse(response.body)).toEqual(
+      JSON.parse(specJsonBlockAfter('Verification failure (§7.4):')),
+    )
+  })
+
+  it('a retry that fails upstream keeps the 503 row of its own outcome', async () => {
+    mocks.create
+      .mockResolvedValueOnce(reply(REPLY))
+      .mockRejectedValueOnce(statusError(529, 'overloaded_error', 'MARKER overloaded'))
+    const unavailable = await handler(post(CASE_1))
+    expect(unavailable.statusCode).toBe(503)
+    expect(JSON.parse(unavailable.body).error).toEqual({ code: 'upstream_unavailable', issues: [] })
+    const first = logLine()
+    expect(Object.keys(first)).toEqual([
+      ...BASE_KEYS,
+      ...TOKEN_KEYS,
+      'failedRules',
+      'upstreamError',
+    ])
+    // The retry billed nothing it reported, so the tokens are the first call's.
+    expect(first).toMatchObject({
+      inputTokens: 1742,
+      outputTokens: 251,
+      failedRules: [REPLY_FAILS],
+      upstreamError: 'status 529',
+    })
+    expect(written.join('')).not.toContain('MARKER')
+
+    written = []
+    mocks.create
+      .mockResolvedValueOnce(reply(REPLY))
+      .mockResolvedValueOnce(
+        reply('Qué pasa', 'max_tokens', { input_tokens: 1742, output_tokens: 600 }),
+      )
+    const truncated = await handler(post(CASE_1))
+    expect(JSON.parse(truncated.body).error).toEqual({ code: 'upstream_truncated', issues: [] })
+    expect(logLine()).toMatchObject({
+      status: 503,
+      inputTokens: 1742 + 1742,
+      outputTokens: 251 + 600,
+      failedRules: [REPLY_FAILS],
+      upstreamError: 'stop_reason max_tokens',
+    })
+  })
+
+  it('only a reply with text that ended its turn is verified: no other outcome is retried', async () => {
+    for (const [message, code] of [
+      [reply(REPLY, 'max_tokens'), 'upstream_truncated'],
+      [reply(REPLY, 'refusal'), 'upstream_unavailable'],
+      [reply('', 'end_turn'), 'upstream_unavailable'],
+    ] as const) {
+      written = []
+      mocks.create.mockReset()
+      mocks.create.mockResolvedValue(message)
+      const response = await handler(post(CASE_1))
+      expect(JSON.parse(response.body).error.code).toBe(code)
+      expect(mocks.create).toHaveBeenCalledTimes(1)
+      expect(logLine()).not.toHaveProperty('failedRules')
+    }
+  })
+
+  it('S9: "Banco" and "BANCO" both holding rungs, a reply that names one passes on one call', async () => {
+    const input = inputOf('healthy-3-rung')
+    input.ladder.entities[0].name = 'Banco'
+    input.ladder.entities[2].name = 'BANCO'
+    mocks.create.mockResolvedValue(reply(PASSING))
+    const response = await handler(post(JSON.stringify(input)))
+    expect(response.statusCode).toBe(200)
+    expect(mocks.create).toHaveBeenCalledTimes(1)
+    expect(logLine()).not.toHaveProperty('failedRules')
+  })
+
+  describe('the time budget of SPEC §8.6, with the clock faked', () => {
+    const answerAfter = (ms: number, message: unknown) => () =>
+      new Promise((resolve) => setTimeout(() => resolve(message), ms))
+
+    it('the slow call: a reply failing at B − R gets a 4 113 ms retry, which never answers: 503 at 23 950 ms', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+      expect(HANDLER_BUDGET_MS - RETRY_THRESHOLD_MS).toBe(19_837)
+      mocks.create
+        .mockImplementationOnce(answerAfter(19_837, reply(REPLY)))
+        .mockImplementationOnce(() => new Promise(() => {}))
+      const pending = handler(post(CASE_1))
+      await vi.advanceTimersByTimeAsync(19_837)
+      expect(mocks.create).toHaveBeenCalledTimes(2)
+      expect(mocks.create.mock.calls[0][1].timeout).toBe(20_000)
+      expect(mocks.create.mock.calls[1][1].timeout).toBe(4_113)
+      await vi.advanceTimersByTimeAsync(4_113)
+      const response = await pending
+      expect(response.statusCode).toBe(503)
+      expect(JSON.parse(response.body).error).toEqual({ code: 'upstream_unavailable', issues: [] })
+      expect(logLine()).toMatchObject({
+        status: 503,
+        latencyMs: 23_950,
+        upstreamError: 'deadline',
+        failedRules: [REPLY_FAILS],
+      })
+      expect(mocks.create.mock.calls[1][1].signal.aborted).toBe(true)
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('one millisecond later there is no time for a retry: 502 on one call', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+      mocks.create.mockImplementationOnce(answerAfter(19_838, reply(REPLY)))
+      const pending = handler(post(CASE_1))
+      await vi.advanceTimersByTimeAsync(19_838)
+      const response = await pending
+      expect(response.statusCode).toBe(502)
+      expect(JSON.parse(response.body)).toEqual(failureBody(REPLY_FAILS))
+      expect(mocks.create).toHaveBeenCalledTimes(1)
+      expect(logLine()).toMatchObject({
+        status: 502,
+        latencyMs: 19_838,
+        failedRules: [REPLY_FAILS],
+      })
+    })
+
+    it('the first call is bounded by B too, once more than 3 950 ms have gone before it', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+      // The stub ignores the read's own 3 s abort signal, which runs on the real clock.
+      mocks.send.mockImplementation(answerAfter(3_960, { Parameter: { Value: 'test-key' } }))
+      mocks.create.mockImplementation(() => new Promise(() => {}))
+      const pending = handler(post(CASE_1))
+      await vi.advanceTimersByTimeAsync(3_960)
+      expect(mocks.create.mock.calls[0][1].timeout).toBe(19_990)
+      await vi.advanceTimersByTimeAsync(19_990)
+      const response = await pending
+      expect(response.statusCode).toBe(503)
+      expect(logLine()).toMatchObject({ latencyMs: 23_950, upstreamError: 'deadline' })
+    })
+
+    it('a passing retry still answers by B: 200 at 23 950 ms with a retry that uses its whole deadline', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+      mocks.create
+        .mockImplementationOnce(answerAfter(19_837, reply(REPLY)))
+        .mockImplementationOnce(answerAfter(4_112, reply(PASSING)))
+      const pending = handler(post(CASE_1))
+      await vi.advanceTimersByTimeAsync(19_837 + 4_112)
+      const response = await pending
+      expect(response.statusCode).toBe(200)
+      expect(logLine()).toMatchObject({ latencyMs: 23_949, failedRules: [REPLY_FAILS, []] })
+    })
+  })
+})
+
 describe('row 7: unexpected internal error → 500 internal_error', () => {
   it('a defect is neither a refusal nor an outage, and its message is not logged', async () => {
     // A 200 the SDK parsed but whose usage is missing: reading it throws in this service.
@@ -782,19 +1046,35 @@ describe('the log line (SPEC §8.4)', () => {
     '$id: carries nothing of the body and nothing of the reply',
     async (c) => {
       const input = c.input as RawRequest
-      const text = `Qué pasa y cuándo\n\n${input.ladder.entities.map((e) => e.name).join(', ')}.\n\nRiesgos\n\nSin riesgos para señalar con estos datos.`
-      mocks.create.mockResolvedValue(reply(text))
+      // The first reply, the entity names and little else, fails verification; the retry is the
+      // case's stored reply, which passes. So the line is a 200 after a retry.
+      const namesOnly = `Qué pasa y cuándo\n\n${input.ladder.entities.map((e) => e.name).join(', ')}.\n\nRiesgos\n\nSin riesgos para señalar con estos datos.`
+      const passing = storedReply(c.id)
+      mocks.create.mockResolvedValueOnce(reply(namesOnly)).mockResolvedValueOnce(reply(passing))
       const response = await handler(post(bodyOf(c)))
-      expect(JSON.parse(response.body).text).toBe(text)
+      expect(response.statusCode).toBe(200)
+      expect(JSON.parse(response.body).text).toBe(passing)
       const line = written.join('')
       for (const entity of input.ladder.entities) expect(line).not.toContain(entity.name)
       for (const rung of input.ladder.rungs) expect(line).not.toContain(String(rung.principal))
       for (const fragment of ['Qué pasa', 'Riesgos', 'Sin riesgos', input.asOfDate]) {
         expect(line).not.toContain(fragment)
       }
-      // Every value is an id, a hash, a number or null: there is no free text field on a 200.
-      for (const [key, value] of Object.entries(logLine())) {
+      // Every value is an id, a hash, a number or null, or the §8.4 verification entries: rule
+      // names, constants of §11 rather than request data. There is no free text field on a 200.
+      const parsed = logLine()
+      expect(parsed.failedRules).toHaveLength(2)
+      expect((parsed.failedRules as unknown[])[1]).toEqual([])
+      const ruleNames = specRuleNames()
+      for (const [key, value] of Object.entries(parsed)) {
         if (key === 'requestId' || key === 'bodyHash') continue
+        if (key === 'failedRules') {
+          for (const entry of value as unknown[]) {
+            expect(Array.isArray(entry), key).toBe(true)
+            for (const name of entry as unknown[]) expect(ruleNames, key).toContain(name)
+          }
+          continue
+        }
         expect(value === null || typeof value === 'number', key).toBe(true)
       }
     },

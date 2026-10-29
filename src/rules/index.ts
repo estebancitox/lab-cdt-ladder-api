@@ -30,8 +30,9 @@ export function parseRuleSpec(raw: string): RuleSpec {
 /**
  * SPEC §11 in the order it fixes: N on the reply, entity spans E, `mentions_entity` before
  * masking, then every remaining rule on the text the §11.2 table assigns to it. Pure: the
- * handler can call this on a reply before answering 200, once SPEC §7 has a row for a failed
- * check. `error_message_exact` is not a rule on a reply; see evaluateRefusal.
+ * handler runs it on every reply before answering 200 (§7.4), with the set §11.12 derives, and
+ * the harness with each case's own rules. `error_message_exact` is not a rule on a reply; see
+ * evaluateRefusal.
  */
 export function evaluate(text: string, truth: GroundTruth, rules: readonly string[]): Verdict[] {
   const specs = rules.map(parseRuleSpec)

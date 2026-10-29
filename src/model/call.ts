@@ -11,7 +11,10 @@ import { SYSTEM_PROMPT_V1 } from './prompt.v1'
 export const MODEL = 'claude-sonnet-5-5'
 /** SPEC §8: sized for the reply alone, which is why the call runs without up-front thinking. */
 export const MAX_TOKENS = 600
-/** SPEC §8: the model call, retries included, is abandoned at 20 s. */
+/**
+ * SPEC §8: no model call, retries included, runs past 20 s. It is the first operand of every
+ * call's deadline; src/budget.ts computes the deadline from what remains of the handler budget.
+ */
 export const MODEL_DEADLINE_MS = 20_000
 /**
  * Retries serve failures that return fast: connection errors, 408, 409, 429 and 5xx. An attempt
@@ -59,12 +62,16 @@ function clientFor(apiKey: string): Anthropic {
  * up-front thinking off (`disabled` is rejected), and a request without tools then returns only
  * text, so max_tokens bounds the reply and nothing else.
  *
- * The 20 s limit is enforced here rather than left to the SDK: its `timeout` covers one attempt
- * up to the response headers, not the retries or the body. The signal stops the request in
- * flight and wakes the SDK's backoff sleep; the race guarantees the caller gets its answer at
- * the deadline whatever the SDK does with the signal.
+ * The deadline, at most 20 s (SPEC §8.6), is enforced here rather than left to the SDK: its
+ * `timeout` covers one attempt up to the response headers, not the retries or the body. The
+ * signal stops the request in flight and wakes the SDK's backoff sleep; the race guarantees the
+ * caller gets its answer at the deadline whatever the SDK does with the signal.
  */
-export async function callModel(apiKey: string, userMessage: string): Promise<ModelOutcome> {
+export async function callModel(
+  apiKey: string,
+  userMessage: string,
+  deadlineMs: number,
+): Promise<ModelOutcome> {
   const client = clientFor(apiKey)
   const controller = new AbortController()
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -72,7 +79,7 @@ export async function callModel(apiKey: string, userMessage: string): Promise<Mo
     timer = setTimeout(() => {
       controller.abort()
       reject(new DeadlineError())
-    }, MODEL_DEADLINE_MS)
+    }, deadlineMs)
   })
   // Whichever promise loses the race still settles later, with nobody waiting for it.
   deadline.catch(() => {})
@@ -87,7 +94,7 @@ export async function callModel(apiKey: string, userMessage: string): Promise<Mo
         system: SYSTEM_PROMPT_V1,
         messages: [{ role: 'user', content: userMessage }],
       },
-      { signal: controller.signal, timeout: MODEL_DEADLINE_MS, maxRetries: MAX_RETRIES },
+      { signal: controller.signal, timeout: deadlineMs, maxRetries: MAX_RETRIES },
     )
     request.catch(() => {})
     message = await Promise.race([request, deadline])

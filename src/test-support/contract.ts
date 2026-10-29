@@ -82,6 +82,26 @@ export function specJsonBlockAfter(heading: string): string {
   return SPEC_MD.slice(start, end)
 }
 
+/** The body rows of the SPEC.md table under `header`, up to the first blank line, as cells. */
+export function specTableRows(header: string): string[][] {
+  const at = SPEC_MD.indexOf(`${header}\n`)
+  if (at < 0) throw new Error(`table not found in SPEC.md: ${header}`)
+  const lines = SPEC_MD.slice(at).split('\n')
+  return lines.slice(2, lines.indexOf('')).map((line) =>
+    line
+      .split('|')
+      .slice(1, -1)
+      .map((cell) => cell.trim()),
+  )
+}
+
+/** The rule names of the SPEC §11.12 table's first column, row by row, left to right. */
+export function specRuleNames(): string[] {
+  return specTableRows('| Rule | Argument and where it comes from | Applies |').flatMap(([rule]) =>
+    [...rule.matchAll(/`([a-z_]+)[^`]*`/g)].map((m) => m[1]),
+  )
+}
+
 /** SPEC §7 ERROR_MESSAGE, parsed from the "Fixed strings, byte-exact" block. */
 export function specErrorMessage(): string {
   const m = /^ERROR_MESSAGE\s+(.+)$/m.exec(SPEC_MD)

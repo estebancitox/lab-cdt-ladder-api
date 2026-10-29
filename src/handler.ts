@@ -1,12 +1,21 @@
 import { createHash } from 'node:crypto'
+import { callDeadlineMs, retryFits } from './budget'
 import { errorClassName } from './error-name'
 import { buildExplanationView, type ExplanationView } from './explain'
 import { ApiKeyUnavailableError, getApiKey } from './model/api-key'
-import { callModel } from './model/call'
+import { callModel, type ModelOutcome, type TokenUsage } from './model/call'
 import { buildModelPayload, renderUserMessage } from './model/payload'
 import type { ExplainRequest } from './request/schema'
 import { MAX_BODY_BYTES, validateRequest } from './request/validate'
-import { explanation, json, refusal, serviceFailure, type HttpResponse } from './response'
+import {
+  explanation,
+  json,
+  refusal,
+  serviceFailure,
+  verificationFailure,
+  type HttpResponse,
+} from './response'
+import { deriveRules, evaluate, failedRuleNames, groundTruthFrom, type GroundTruth } from './rules'
 
 /** The fields of a Lambda Function URL event (payload format 2.0) this handler reads. */
 export interface FunctionUrlEvent {
@@ -24,8 +33,12 @@ export interface LambdaContext {
  * SPEC §8.4: one line per request, and nothing the request or the reply contains. `requestId`
  * is the invocation's id, so the line can be joined to the runtime's own START and REPORT
  * records. The counts are known only once the pipeline has accepted the body. Token counts
- * exist when the model answered. The cause fields name a class, a status or a stop reason,
- * never a message: `upstreamError` exists only on a 503, `internalError` only on a 500.
+ * exist when the model answered, summed over both calls when a verification retry was made.
+ * `failedRules` exists only when a reply failed verification (§7.4), whatever the status: one
+ * entry per reply evaluated, in order, each the distinct failed rule names in §11.12 order, an
+ * empty entry for a reply that passed; never a rule's argument. The cause fields name a class,
+ * a status or a stop reason, never a message: `upstreamError` exists only on a 503,
+ * `internalError` only on a 500.
  */
 interface LogLine {
   requestId: string | null
@@ -37,6 +50,7 @@ interface LogLine {
   latencyMs: number
   inputTokens?: number
   outputTokens?: number
+  failedRules?: string[][]
   upstreamError?: string
   internalError?: string
 }
@@ -58,7 +72,7 @@ export async function handler(
   }
   let response: HttpResponse
   try {
-    response = await respond(event, raw, line)
+    response = await respond(event, raw, line, () => performance.now() - startedAt)
   } catch (error) {
     // SPEC §7: a defect in this service. Only the class of the error is logged: its message
     // can carry request data (SPEC §8.4).
@@ -76,6 +90,7 @@ async function respond(
   event: FunctionUrlEvent | null | undefined,
   raw: Buffer,
   line: LogLine,
+  elapsedMs: () => number,
 ): Promise<HttpResponse> {
   // SPEC §8: the cap applies to Content-Length and to the raw body, before parsing. Either one
   // over the cap refuses. A small declared length never admits a large body, because
@@ -85,6 +100,8 @@ async function respond(
 
   let request: ExplainRequest
   let view: ExplanationView
+  let truth: GroundTruth
+  let rules: string[]
   try {
     const outcome = validateRequest(raw)
     if (!outcome.ok) return json(outcome.status, outcome.body)
@@ -92,6 +109,10 @@ async function respond(
     line.rungCount = request.ladder.rungs.length
     line.entityCount = request.ladder.entities.length
     view = buildExplanationView(request)
+    // SPEC §8.6: A, D, S, the entity names and the derived set are built before the first
+    // model call, outside the verification window.
+    truth = groundTruthFrom(request, view)
+    rules = deriveRules(view)
   } catch (error) {
     // The engine refuses by RangeError what it cannot represent in pesos or as a date, and
     // validateScenario does not reject every such ladder first. The input is the cause: 400.
@@ -109,12 +130,37 @@ async function respond(
     return serviceFailure('upstream_unavailable')
   }
 
-  const outcome = await callModel(apiKey, userMessage)
-  if (outcome.usage !== undefined) {
-    line.inputTokens = outcome.usage.inputTokens
-    line.outputTokens = outcome.usage.outputTokens
-  }
-  if (outcome.kind === 'ok') return explanation(outcome.text)
+  // SPEC §7.4: every reply is verified before a 200. A failed one is retried once when the
+  // budget leaves at least R; the elapsed time that gates the retry also sets its deadline.
+  const first = await callModel(apiKey, userMessage, callDeadlineMs(elapsedMs()))
+  addUsage(line, first.usage)
+  if (first.kind !== 'ok') return upstreamFailure(line, first)
+  const firstFailed = failedRuleNames(evaluate(first.text, truth, rules))
+  if (firstFailed.length === 0) return explanation(first.text)
+  line.failedRules = [firstFailed]
+  const elapsed = elapsedMs()
+  if (!retryFits(elapsed)) return verificationFailure(firstFailed)
+
+  const retry = await callModel(apiKey, userMessage, callDeadlineMs(elapsed))
+  addUsage(line, retry.usage)
+  if (retry.kind !== 'ok') return upstreamFailure(line, retry)
+  const retryFailed = failedRuleNames(evaluate(retry.text, truth, rules))
+  line.failedRules.push(retryFailed)
+  return retryFailed.length === 0 ? explanation(retry.text) : verificationFailure(retryFailed)
+}
+
+/** SPEC §8.4: the token fields are the spend, so a second call adds to the first. */
+function addUsage(line: LogLine, usage: TokenUsage | undefined): void {
+  if (usage === undefined) return
+  line.inputTokens = (line.inputTokens ?? 0) + usage.inputTokens
+  line.outputTokens = (line.outputTokens ?? 0) + usage.outputTokens
+}
+
+/** SPEC §7: a call that failed as upstream keeps the 503 row of its own outcome. */
+function upstreamFailure(
+  line: LogLine,
+  outcome: Exclude<ModelOutcome, { kind: 'ok' }>,
+): HttpResponse {
   line.upstreamError = outcome.cause
   return serviceFailure(
     outcome.kind === 'truncated' ? 'upstream_truncated' : 'upstream_unavailable',
