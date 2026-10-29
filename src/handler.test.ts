@@ -18,6 +18,7 @@ import {
   bodyOf,
   caseById,
   inputOf,
+  storedReply,
   type RawRequest,
 } from './test-support/contract'
 
@@ -57,8 +58,14 @@ vi.mock('@aws-sdk/client-ssm', () => ({
 }))
 
 const PARAMETER = '/lab-cdt-ladder-api/anthropic-api-key'
+/**
+ * A reply that fails the derived set of case 1 (SPEC §11.12): it names no rung date and no
+ * entity and has too few Spanish words. Used where no reply is verified and as a failing reply.
+ */
 const REPLY =
   'Qué pasa y cuándo\n\nTu escalera tiene 3 peldaños.\n\nRiesgos\n\nSin riesgos para señalar con estos datos.'
+/** A reply of the stored v1 run for case 1, which passes its derived set. */
+const PASSING = storedReply('healthy-3-rung')
 const USAGE = { input_tokens: 1742, output_tokens: 251 }
 
 let handler: typeof import('./handler').handler
@@ -210,15 +217,15 @@ describe('the SPEC §7 table is the list of rows this file covers', () => {
 
 describe('200: the explanation (SPEC §7.1)', () => {
   it('returns { text } with the reply exactly as the model wrote it, and nothing else', async () => {
-    mocks.create.mockResolvedValue(reply(REPLY))
+    mocks.create.mockResolvedValue(reply(PASSING))
     const response = await handler(post(CASE_1))
     expect(response.statusCode).toBe(200)
     expect(response.headers).toEqual(HEADERS)
-    expect(JSON.parse(response.body)).toEqual({ text: REPLY })
+    expect(JSON.parse(response.body)).toEqual({ text: PASSING })
   })
 
   it('sends one request: the model, max_tokens 600, thinking off, prompt v1, the payload as JSON', async () => {
-    mocks.create.mockResolvedValue(reply(REPLY))
+    mocks.create.mockResolvedValue(reply(PASSING))
     await handler(post(CASE_1))
     expect(mocks.create).toHaveBeenCalledTimes(1)
     const [params, options] = mocks.create.mock.calls[0]
@@ -257,14 +264,14 @@ describe('200: the explanation (SPEC §7.1)', () => {
   })
 
   it.each([...VALID_CASES])('$id is explained', async (c) => {
-    mocks.create.mockResolvedValue(reply(REPLY))
+    mocks.create.mockResolvedValue(reply(storedReply(c.id)))
     const response = await handler(post(bodyOf(c)))
     expect(response.statusCode).toBe(200)
     expect(mocks.create).toHaveBeenCalledTimes(1)
   })
 
   it('decodes a base64 body before measuring, hashing and validating it', async () => {
-    mocks.create.mockResolvedValue(reply(REPLY))
+    mocks.create.mockResolvedValue(reply(PASSING))
     const bytes = Buffer.from(CASE_1, 'utf8')
     const response = await handler(postBase64(bytes))
     expect(response.statusCode).toBe(200)
@@ -274,7 +281,7 @@ describe('200: the explanation (SPEC §7.1)', () => {
 
 describe('the API key (SSM SecureString, once per container)', () => {
   it('is read from the parameter named by the environment, decrypted, and only once', async () => {
-    mocks.create.mockResolvedValue(reply(REPLY))
+    mocks.create.mockResolvedValue(reply(PASSING))
     await handler(post(CASE_1))
     await handler(post(CASE_1))
     expect(mocks.send).toHaveBeenCalledTimes(1)
@@ -292,14 +299,14 @@ describe('the API key (SSM SecureString, once per container)', () => {
 
   it('is not kept when the read fails: the next request reads again', async () => {
     mocks.send.mockRejectedValueOnce(Object.assign(new Error('denied'), { name: 'AccessDenied' }))
-    mocks.create.mockResolvedValue(reply(REPLY))
+    mocks.create.mockResolvedValue(reply(PASSING))
     expect((await handler(post(CASE_1))).statusCode).toBe(503)
     expect((await handler(post(CASE_1))).statusCode).toBe(200)
     expect(mocks.send).toHaveBeenCalledTimes(2)
   })
 
   it('never appears in a response or in the log', async () => {
-    mocks.create.mockResolvedValue(reply(REPLY))
+    mocks.create.mockResolvedValue(reply(PASSING))
     const response = await handler(post(CASE_1))
     expect(response.body).not.toContain('test-key')
     expect(written.join('')).not.toContain('test-key')
@@ -346,7 +353,7 @@ describe('row 1: body over the byte cap → 413 payload_too_large', () => {
   })
 
   it('accepts exactly 8192 bytes, as text and as base64, and logs the measured size', async () => {
-    mocks.create.mockResolvedValue(reply(REPLY))
+    mocks.create.mockResolvedValue(reply(PASSING))
     const exact = padded(MAX_BODY_BYTES)
     expect((await handler(post(exact))).statusCode).toBe(200)
     expect(logLine()).toMatchObject({ bodyBytes: MAX_BODY_BYTES, bodyHash: sha256(exact) })
@@ -356,7 +363,7 @@ describe('row 1: body over the byte cap → 413 payload_too_large', () => {
   })
 
   it('ignores a Content-Length that is not a plain integer and decides on the bytes', async () => {
-    mocks.create.mockResolvedValue(reply(REPLY))
+    mocks.create.mockResolvedValue(reply(PASSING))
     for (const value of ['', 'abc', '-1', '1e9', '487, 487']) {
       written = []
       expect((await handler(post(CASE_1, value))).statusCode, value).toBe(200)
@@ -593,7 +600,7 @@ describe('row 5: model unavailable, overloaded or timed out → 503 upstream_una
 
   it('a reply that arrives before the deadline leaves no timer behind', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
-    mocks.create.mockResolvedValue(reply(REPLY))
+    mocks.create.mockResolvedValue(reply(PASSING))
     expect((await handler(post(CASE_1))).statusCode).toBe(200)
     expect(vi.getTimerCount()).toBe(0)
     expect(mocks.create.mock.calls[0][1].signal.aborted).toBe(false)
@@ -737,7 +744,7 @@ describe('row 7: unexpected internal error → 500 internal_error', () => {
 
 describe('the log line (SPEC §8.4)', () => {
   it('is one JSON line with the request id, the §8.4 fields and the token counts', async () => {
-    mocks.create.mockResolvedValue(reply(REPLY))
+    mocks.create.mockResolvedValue(reply(PASSING))
     await handler(post(CASE_1), { awsRequestId: 'e1506fd5-9e7b-434f-bd42-4f8fa224b599' })
     const line = logLine()
     expect(Object.keys(line)).toEqual([...BASE_KEYS, ...TOKEN_KEYS])
@@ -757,7 +764,7 @@ describe('the log line (SPEC §8.4)', () => {
   })
 
   it('has requestId null when the invocation carries no context', async () => {
-    mocks.create.mockResolvedValue(reply(REPLY))
+    mocks.create.mockResolvedValue(reply(PASSING))
     await handler(post(CASE_1))
     expect(logLine()).toMatchObject({ requestId: null })
     written = []
@@ -766,7 +773,7 @@ describe('the log line (SPEC §8.4)', () => {
   })
 
   it('counts rungs and entities as the request lists them', async () => {
-    mocks.create.mockResolvedValue(reply(REPLY))
+    mocks.create.mockResolvedValue(reply(storedReply('twelve-rungs')))
     await handler(post(bodyOf(caseById('twelve-rungs'))))
     expect(logLine()).toMatchObject({ rungCount: 12, entityCount: 6 })
   })
