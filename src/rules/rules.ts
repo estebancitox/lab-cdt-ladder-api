@@ -23,10 +23,16 @@ export const FLAG_RULES: Record<string, RiskKey> = {
 }
 
 const MONTHS = 'ene|feb|mar|abr|may|jun|jul|ago|sep|sept|oct|nov|dic'
-/** SPEC §11.3 step 3, the two patterns given, and the month-alone forms as read in the plan. */
+/** SPEC §11.3 step 3, the two patterns given. */
 const ISO_DATE = /\d{4}-\d{2}-\d{2}/g
 const DAY_MONTH_YEAR = new RegExp(`\\b\\d{1,2}( de)? (${MONTHS})[a-zé]*( de)? \\d{4}\\b`, 'g')
-const MONTH_ALONE = new RegExp(`\\b(${MONTHS})[a-zé]*( de)? \\d{4}\\b`, 'g')
+/**
+ * SPEC §11.3 step 3, the month-alone form, verbatim: exactly D's `junio de 2027` and
+ * `junio 2027` renderings, whole month names only, so a word that merely begins like one
+ * (`mayor de 1440`, `margen de 2000`) is not read as a date.
+ */
+export const MONTH_ALONE =
+  /\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)( de)? \d{4}\b/g
 /**
  * SPEC §11.3 step 3, the day-and-month form without a year, verbatim: exactly D's `1 de junio`
  * rendering. It runs on what the forms with a year leave.

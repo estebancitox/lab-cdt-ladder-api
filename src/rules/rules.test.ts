@@ -9,12 +9,14 @@ import {
   type RawRequest,
 } from '../test-support/contract'
 import { entitySpans, mask } from './entities'
-import { groundTruthFrom } from './ground-truth'
+import { FULL_MONTHS, groundTruthFrom } from './ground-truth'
 import { normalize } from './normalize'
+import { MONTHS_ES } from '../engine'
 import {
   ADVICE,
   DAY_MONTH,
   ENGLISH_WORDS,
+  MONTH_ALONE,
   SPANISH_WORDS,
   errorMessageExact,
   flagsRisk,
@@ -134,6 +136,36 @@ describe('SPEC §11.3 numbers_subset_of_input', () => {
 
   it('pins the year-less pattern to SPEC §11.3 step 3, verbatim', () => {
     expect(SPEC_MD).toContain(`\`${DAY_MONTH.source}\``)
+  })
+
+  it('pins the month-alone pattern to SPEC §11.3 step 3, verbatim', () => {
+    expect(SPEC_MD).toContain(`\`${MONTH_ALONE.source}\``)
+  })
+
+  it('the month-alone form is read for every whole month name, with and without `de`', () => {
+    // No date of case 1 falls in 2031, so each form is a date that is not in D.
+    expect(FULL_MONTHS).toHaveLength(12)
+    for (const month of FULL_MONTHS) {
+      expect(run(`Vence en ${month} de 2031.`).evidence).toBe(`invented date: ${month} de 2031`)
+      expect(run(`Vence en ${month} 2031.`).evidence).toBe(`invented date: ${month} 2031`)
+    }
+  })
+
+  it('an abbreviated month alone is not a date: its year is a number A decides', () => {
+    // D renders the month-alone form with whole names only, as it does the year-less form.
+    for (const short of [...MONTHS_ES, 'sept']) {
+      expect(run(`Vence en ${short} 2031.`).evidence, short).toBe('not in A: 2031. → 2031')
+    }
+  })
+
+  it('a word that only begins like a month is not a date', () => {
+    const input = inputOf('healthy-3-rung')
+    input.ladder.rungs[1].days = 1440
+    input.ladder.rungs[2].days = 2000
+    const truth = truthOf(input)
+    expect([truth.allowed.has(1440), truth.allowed.has(2000)]).toEqual([true, true])
+    expect(run('Un plazo mayor de 1440 días.', truth).pass).toBe(true)
+    expect(run('Queda un margen de 2000 días.', truth).pass).toBe(true)
   })
 
   it('deletes every trailing period from a token before it is read (SPEC §11.3 step 5)', () => {

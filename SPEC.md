@@ -895,7 +895,11 @@ exactly the text that rule looks for.
    is not searched and records no span. A name's length is its number of UTF-16 code units
    after N, before lowercasing; names of equal length are searched in the order of the
    request's `entities`. Every occurrence of a name is a match, left to right, overlapping
-   occurrences of the same name included.
+   occurrences of the same name included. Lowering is code point by code point, for the text
+   and for the name alike, here, in step 3 and in §11.5: each code point is lowered on its own
+   with `toLocaleLowerCase('es')`. Lowering a whole string depends on context for one character,
+   Σ, which becomes ς at the end of a word; code point by code point Σ always becomes σ, so a
+   name is found wherever it is copied, while a ς the text itself writes stays ς (§12).
 3. **Evaluate `mentions_entity:<name>` now.** It passes if and only if at least one span was
    recorded for that entity or for another whose normalized name compares equal to its own
    under `toLocaleLowerCase('es')`.
@@ -945,7 +949,12 @@ Runs on the masked text.
    that the day-and-month form below is read against the same folding as every other form.
    Find every date-shaped substring using `\d{4}-\d{2}-\d{2}` and
    `\b\d{1,2}( de)? (ene|feb|mar|abr|may|jun|jul|ago|sep|sept|oct|nov|dic)[a-zé]*( de)? \d{4}\b`
-   and the month-alone forms, and then, on what those leave, the day-and-month form without a
+   and the month-alone form,
+   `\b(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)( de)? \d{4}\b`,
+   which is exactly D's renderings `junio de 2027` and `junio 2027`: whole month names only, so
+   an abbreviated month alone is not a date and its year is a number A decides, and a word that
+   merely begins like a month, as in `mayor de 1440` or `margen de 2000`, is not a date either.
+   Then, on what those leave, find the day-and-month form without a
    year, `\b\d{1,2} de (enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)\b`,
    which is exactly D's rendering `1 de junio` and nothing broader: no abbreviation and no
    year-less `1 jun`. Each must be a member of D, matched longest-first, the forms with a year
@@ -955,7 +964,8 @@ Runs on the masked text.
 4. If a `-` immediately precedes a digit, or immediately precedes a `$` that a digit
    immediately follows, the three characters adjacent as in `-$1` with nothing between them,
    anywhere in the remainder, **fail**. A valid explanation contains no negative number,
-   because the view exposes none, and the formatter's own negative form, emitted as `-$ 1.234`
+   because the view exposes none, not even a signed zero, since a JSON `-0` is read as `0`
+   (§7.3), and the formatter's own negative form, emitted as `-$ 1.234`
    and already `-$1.234` by step 8 of N when this rule runs, fails here on its sign rather than
    later on membership.
 
@@ -1096,9 +1106,10 @@ Runs on the raw response, with no normalization.
 
 ### 11.12 Derivation of the production rule set
 
-The handler evaluates, on every reply (§7.4), a rule set derived from the request and the view
-alone, with no fixture. This table is what the derivation function of 4B-code implements, and it
-is complete: every rule of §11 has a row. Its row order, left to right within the flags row, is
+The handler evaluates, on every reply (§7.4), a rule set derived from the view alone, with no
+fixture; A, D and the entity names the rules check against come from the request and the view
+(§11.3). This table is what `deriveRules(view)` in `src/rules/derive.ts` implements, and it is
+complete: every rule of §11 has a row. Its row order, left to right within the flags row, is
 the order of the derived set, and so of the issues of a 502 (§7.4) and of the names in the log
 line (§8.4).
 
