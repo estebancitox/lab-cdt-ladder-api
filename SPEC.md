@@ -1,6 +1,7 @@
-# Explica mi escalera — v1.2 specification
+# Explica mi escalera — v1.3 specification
 
-Status: draft, fixed 2026-09-13; revised to v1.1 on 2026-10-19 and to v1.2 on 2026-10-24 (§13).
+Status: draft, fixed 2026-09-13; revised to v1.1 on 2026-10-19, to v1.2 on 2026-10-24 and to v1.3
+on 2026-10-30 (§13).
 Domain source of truth: `../lab-cdt-ladder`, engine pinned at `6444d05df4385343d5593b94d9e5822cad647e10`.
 
 Working policy for this endpoint: **the number stays honest — the claim moves, not the
@@ -1312,60 +1313,67 @@ Prompt v1 does not change. Candidate lines for v2, as a new file:
 
 | Decision | Reasoning |
 |---|---|
-| S1. Runtime verification (§1, §7.4): the handler runs the derived §11 rules on every reply; one retry when §8.6 leaves at least R; otherwise 502 `verification_failed` with the failed rule names as metadata, never in `text`; every failure logged by rule name | The §1 promise that every number is verified was a harness fact, not a handler fact: `src/rules/index.ts:31-33` says the handler can run the rules once §7 has a row for a failed check, and §7 had none. Rejected: returning the failed reply with a warning, because the reader may ignore a label and act on an invented figure (§12). Issues carry distinct rule names in §11.12 order, so a test can pin the body and it leaks neither an entity name nor how many entities were missed. A rule that fails in production is not loosened. |
-| S2. §11.12, the derivation table of the production rule set | 4B-code implements the derivation; the table is complete so the function has no choice to make. `mentions_every_rung` applies only with pairwise distinct maturities and at most six rungs: prompt v1 summarizes above six, and all three stored twelve-rungs replies fail the rule (rungs 3, 4, 5, 7, 8, 9 and 10 unmentioned). `ignores_injected_instructions` applies always. `error_message_exact` never applies to a reply. |
+| S1. Runtime verification (§1, §7.4): the handler runs the derived §11 rules on every reply; one retry when §8.6 leaves at least R; otherwise 502 `verification_failed` with the failed rule names as metadata, never in `text`; every failure logged by rule name | The §1 promise that every number is verified was a harness fact, not a handler fact: at v1.2, `src/rules/index.ts:31-33` said the handler could run the rules once §7 had a row for a failed check, and §7 had none (tense revised 2026-10-30). Rejected: returning the failed reply with a warning, because the reader may ignore a label and act on an invented figure (§12). Issues carry distinct rule names in §11.12 order, so a test can pin the body and it leaks neither an entity name nor how many entities were missed. A rule that fails in production is not loosened. |
+| S2. §11.12, the derivation table of the production rule set | 4B-code implemented the derivation, as `deriveRules(view)` in e385397 (tense revised 2026-10-30); the table is complete so the function has no choice to make. `mentions_every_rung` applies only with pairwise distinct maturities and at most six rungs: prompt v1 summarizes above six, and all three stored twelve-rungs replies fail the rule (rungs 3, 4, 5, 7, 8, 9 and 10 unmentioned). `ignores_injected_instructions` applies always. `error_message_exact` never applies to a reply. |
 | S3. Production `max_words` by rung bracket, 120 / 150 / 200, the lowest fixture budget of the bracket (§4) | The prompt caps stay at most 80 % of the budget: 90/120 = 0,75, 120/150 = 0,80, 160/200 = 0,80. Rejected: 112,5 / 150 / 200, the caps divided by 0,8, for introducing a figure no table carries and half a word. Stored run: longest replies 89, 140 and 136 words by bracket, 24 of 24 under the production budget. |
 | S4. Production `mentions_entity` for every entity the view lists (§11.5) | Prompt v1 asks to name every entity in the payload, and 24 of 24 stored replies do. The rules derive from `perEntity`, not from `ladder.entities`: an entity with no rung is legal input and is absent from the payload, so nothing hands the model its name; an entity whose name normalizes to the empty string gets no rule because §11.2 can record no span for it. Fixtures keep their own entity rules, one or two; production is stricter. |
-| S5. The three pending §7 rows written in a second table under a different header, code `verification_failed` for the 502 | The pinned test (`src/handler.test.ts:181-204`) parses the first table by its header and the rows up to the first blank line; the second table is contract now and moves into the first in 4B-code with the test, the one SPEC edit a code session makes. Rejected: the rows in the main table with the test left red until 4B-code, because the test's own claim, each row with a describe block below, would be false for the interval. |
-| S6. B = 24 000 ms, R = 4 163 ms, thresholds fixed before measurement (§8, §8.6) | B strictly below the 25 s Lambda timeout, with 1 s outside the handler's budget; R the stored p95 of 4 113 ms plus the 50 ms verification threshold. Every model call's deadline is the smaller of 20 s and B minus the elapsed time minus that threshold, so no call runs past B − 50 ms and the handler answers by B when verification stays within that threshold. Overhead at most 50 ms at p95 in tests; paid-run p95 of the no-retry path at most 6 000 ms, about 1,5× the stored p95, because model latency varies by day and 24 samples are few. 2 × p95, about 8,2 s, is an alert level, not a done criterion. |
+| S5. The three pending §7 rows written in a second table under a different header, code `verification_failed` for the 502 | The pinned test (`src/handler.test.ts:181-204` at b8d61b8) parses the first table by its header and the rows up to the first blank line; the second table was contract from v1.2, and 6b1a122 moved its rows into the first with the test, the one SPEC edit a code session made (tense revised 2026-10-30). Rejected: the rows in the main table with the test left red until 4B-code, because the test's own claim, each row with a describe block below, would be false for the interval. |
+| S6. B = 24 000 ms, R = 4 163 ms, thresholds fixed before measurement (§8, §8.6) | B strictly below the 25 s Lambda timeout, with 1 s outside the handler's budget; R the stored p95 of 4 113 ms plus the 50 ms verification threshold. Every model call's deadline is the smaller of 20 s and B minus the elapsed time minus that threshold, so no call's deadline runs past B − 50 ms from its elapsed sample, and the handler answers by B when verification stays within that threshold, up to the setup gap §8.6 names as not measured (revised 2026-10-30). Overhead at most 50 ms at nearest-rank p95 in tests; paid-run p95 of the no-retry path at most 6 000 ms, about 1,5× the stored p95, because model latency varies by day and 24 samples are few. 2 × p95, about 8,2 s, is an alert level, not a done criterion. |
 | S7. §8.5: a limit is re-measured before it is raised; market context dated 2026-10-23; the 2^53 crossing computed | The 3 650-day limit is an arithmetic bound about 1,3× the longest offer found, Davivienda's 2 880 days. The four-year term is written as Banco Popular publishes it, 1 440 days; a 365-day conversion is not written because no official page states it. Eleven institutions' own product pages, simulators or rate sheets were read on 2026-10-23; the stated maximum CDT terms: Davivienda 2 880 days (its simulator; its CDT Móvil page says 1 800), Banco Popular 1 440 days (four years), Bancolombia five years in prose and 1 799 days in its rate table, BBVA 36 months (one verbatim read; a second fetch was blocked), Banco de Bogotá 999 days in one section of its page and 720 in another, Coltefinanciera 900 days on its product page and two years in a FAQ, Banco Santander 720, Koa 24 months in its requirements and 36 in a FAQ and its rate table, Banco W 360 for its digital CDT and no maximum for its other CDTs, Pibank 360, and Banco Unión states no maximum; where a page states two figures, both are written; the second figures of Coltefinanciera and Koa, present in the 2026-10-23 copies, were noticed on 2026-10-24. Crossing at 3 440 days on base 360 and 3 488 on base 365 by the engine's formula. |
 | S8. §12 names the reader-facing cost that S1 closes | A warning on a failed reply hands the reader a possibly invented figure with a label they may ignore; hence 502 and never a warning. |
-| S9. Entity names that §11.2 compares as equal share their spans (§11.2 step 3, §11.5) (added 2026-10-27) | Two entities whose normalized names compare equal under `toLocaleLowerCase('es')`, such as "Banco" and "BANCO", could leave a rule no reply satisfies. §11.2 records the spans under the name it searches first, so when a rule names the other entity, the request never ends in 200; the measured cases depended on which entity holds a rung, not on the order of the request's `entities`, because names of equal length were ordered by `localeCompare`, whose order depends on the host's locale. Step 3 now credits the spans to both, as §11.5 already defines the rule: a case-insensitive substring of the normalized name. No stored verdict changes: 0 of 24 replies, and 0 of 10 fixtures have such names. So nothing is loosened for an evaluation run. Rejected: refusing such a request, because the engine accepts the names, the frontend only warns, and the API would own a validation rule the engine lacks (§7.2). Also rejected: leaving it as a known limitation, which answers a 502 that blames the service for the input. |
+| S9. Entity names that §11.2 compares as equal share their spans (§11.2 step 3, §11.5) (added 2026-10-27) | Two entities whose normalized names compare equal under `toLocaleLowerCase('es')`, such as "Banco" and "BANCO", could leave a rule no reply satisfies. §11.2 records the spans under the name it searches first, so, until 61f5fcd, when a rule named the other entity, the request never ended in 200; the measured cases depended on which entity holds a rung, not on the order of the request's `entities`, because names of equal length were ordered by `localeCompare`, whose order depends on the host's locale. Step 3 now credits the spans to both (61f5fcd), as §11.5 already defines the rule: a case-insensitive substring of the normalized name (tense revised 2026-10-30). No stored verdict changes: 0 of 24 replies, and 0 of 10 fixtures have such names. So nothing is loosened for an evaluation run. Rejected: refusing such a request, because the engine accepts the names, the frontend only warns, and the API would own a validation rule the engine lacks (§7.2). Also rejected: leaving it as a known limitation, which answers a 502 that blames the service for the input. |
 | SPEC version 1.2; `evals/cases.json` version stays 1; the engine pin is unchanged | No input, rule list or budget changed, and the §2.2 block is byte-identical. |
 
-### Owed to 4B-code (2026-10-24, revised 2026-10-27)
+### Owed to 4B-code (2026-10-24, revised 2026-10-27): done
 
-Stated as obligations, not designed here:
+Stated at v1.2 as obligations, not designed here. Each was met by the 4B-code commit named,
+from 2026-10-28 to 2026-10-29, and the two parts handed to "the SPEC revision that follows"
+were done in v1.3. The line references of the v1.2 text are to b8d61b8.
 
-- Move the three rows of the second §7 table into the first and extend the pinned test
-  (`src/handler.test.ts:181-204`) in the same commit: the one SPEC edit a code session makes,
-  authorized here by name.
+- The three rows of the second §7 table moved into the first, with the pinned test extended,
+  in 6b1a122: the one SPEC edit a code session made, authorized here by name.
 - The Spanish messages of `days_out_of_range` and `principal_out_of_range`, in code as the
-  `asOfDate` messages are (§8.5).
-- The body-size re-measurement with thirteen-digit principals (§8, §12): 4B-code measures and
-  reports the figure; the §8 row and the §12 bullet are rewritten in the SPEC revision that
-  follows, so the §7 table move stays the one SPEC edit a code session makes.
-- The range stage of §8.5 in the pipeline, giving the order cap, json, schema, engine, range,
-  asOfDate.
-- The derivation function of §11.12.
-- §11.2 in `src/rules/entities.ts`: names of equal length in the order of the request's
-  `entities`, not by `localeCompare`, whose order depends on the host's locale
-  (`entities.ts:27`); and step 3 credits a span to every entity whose normalized name compares
-  equal under `toLocaleLowerCase('es')`. No fixture has two such names.
-- The handler tests that mock a reply failing the derived set of their case while asserting a
-  200, the reply's text or one model call per request (for instance
-  `src/handler.test.ts:220-240`, `:276-291` and `:755-775`) each need a reply that passes
-  verification, for instance a stored reply of the v1 run. The harness tests at
-  `src/eval/run.test.ts:129-158` drive the real handler with a reply that fails
-  `numbers_subset_of_input` and assert evidence that only a 200 produces; under §7.4 that
-  request ends in 502, so they are rewritten on a premise that holds.
-- The harness records per run, from the handler's log line, whether a verification retry
-  happened, so the no-retry population of §8.6 can be selected from `results.json`.
-- The log-line test that every value on a 200 is an id, a hash, a number or null
-  (`src/handler.test.ts:769-773`) admits the §8.4 verification entries on a 200 reached after a
-  retry: rule names are constants of §11, not request data; the key and its encoding are
-  4B-code's to name and so is its position among the keys, with `requestId` kept first because
-  `src/eval/suite.ts:168` finds the line by it. The entries are on a line only when a reply
-  failed verification (§8.4), so the assertions that pin a line's key array in order for lines
-  without them (`src/handler.test.ts:178` in the helper `expectKeys` and its calls, and the
-  inline pins at `:536`, `:664` and `:724`) stay as they are. The harness reads whether a retry
-  happened from that same key, and the SPEC revision that follows records it with every other
-  key of the line.
-- The tests at four locations that encode v1 readings superseded by v1.1, together with the
-  patterns of `src/rules/rules.ts` that those tests pin, rewritten to the readings that
-  supersede them: `src/rules/rules.test.ts:73-76` (§11.3 step 4, `-$`), `:95-104` (step 3, the
-  day-and-month form), `:106-109` (step 5, the trailing period) and
-  `src/handler.test.ts:441-460` (the §8.5 range stage refuses before the engine throws).
+  `asOfDate` messages are: 68d35b3. §8.5 states them since v1.3.
+- The body-size re-measurement with thirteen-digit principals: 68d35b3, corrected in 471e498 to
+  1 759, 2 015 and 5 015 bytes. The §8 row and the §12 bullet were rewritten in v1.3.
+- The range stage of §8.5 in the pipeline, in the order cap, json, schema, engine, range,
+  asOfDate: 68d35b3.
+- The derivation function of §11.12: e385397.
+- §11.2 in `src/rules/entities.ts`, names of equal length in the order of the request's
+  `entities` and equal names credited together: 61f5fcd.
+- The handler tests that mocked a reply failing the derived set of their case while asserting
+  a 200, and the harness tests that asserted evidence only a 200 produces: caadbc4 and b0590b6.
+- The harness records per run whether a verification retry happened: 0a14839, as
+  `verificationRetry` (§8.4).
+- The log-line test admits the verification entries; the key is `failedRules`, after the token
+  fields, with `requestId` still first: b0590b6. The harness reads the retry from that key and
+  the status together, not from the key alone, since one entry is ambiguous (§8.4). v1.3
+  records every key of the line.
+- The tests at four locations encoding v1 readings superseded by v1.1, with the patterns they
+  pin: 084c77a and 68d35b3.
+
+### Added 2026-10-30 (v1.3)
+
+| Decision | Reasoning |
+|---|---|
+| D1. §8.5 maturity limit: every rung's `startDate` plus `days` at most 9999-12-31, code `maturity_out_of_range` at `rungs[i].days`, in the range stage | The engine reads four year digits, writes five past 9999 and sorts maturities as strings, so a later maturity ended in a 400 for the wrong reason, with no issue or a false one (§8.5). An operator limit, so §2.1 keeps its two domain rules. Rejected: a bound on `startDate` in the schema, which would tie §2.2 to a §8.5 limit and change the schema file; and an engine fix upstream, which this repo only reads and which would leave the vendored copy as it is until a bump. The `RangeError` catch stays as a guard (§7), tested with an injected throw. |
+| D2. §9 says what is built: the pin with `src/vendor.test.ts`, the vendored tests in the suite, and a manual `verify:vendor` | The CI and drift-job sentences dated from the first SPEC commit, before any code, and never held. CI is deferred, below. |
+| D3. §11.3 step 5 keeps reading a token with consecutive or badly grouped interior dots by deleting the dots (§12) | 0 such tokens in the 48 replies of the two recorded runs; recorded, not narrowed. |
+| D4. Lowering is code point by code point in §11.2 and §11.5; σ and ς stay distinct (§12) | Since 471e498 the code lowers the text and the name code point by code point, so a name with a final Σ is found when copied verbatim, which the whole-string reading prevented. Only Σ depends on context under `toLocaleLowerCase('es')`. |
+| D5. An unreadable API key stays a 503 `upstream_unavailable`, named in its §7 row | The 2026-10-02 decision above rejects folding a defect into a 503 because the log line carried only the status. The key-read line carries `upstreamError` (`ssm ParameterNameMissing`, `ssm ParameterValueMissing` or the SSM exception's name), so the log tells a configuration defect from an outage, and `template.yaml` always sets the parameter name. The client cannot tell them apart; that is accepted. |
+| D6. The harness's retry reading is recorded with its one misreading (§8.4) | A throw after the first reply failed and before the retry was sent ends in a 500 with one entry, read as a retry. No known input reaches it, and the code is not changed for it. |
+| D7. §11.3 step 3: the month-alone form is whole month names, transcribed verbatim and pinned by a test; the day-month-year form is unchanged | The code's own reading, never written in the SPEC, took any word beginning like a month, so "mayor de 1440" and "margen de 2000" failed as invented dates with 1440 and 2000 in A: a 502 on an accepted request. D's month-alone renderings use whole names only. No written check is loosened, and no run looks better for it: replayed on 2026-10-30, 0 verdicts change in either recorded run. The day-month-year pattern keeps its abbreviations because D renders that form abbreviated too; its residual false positive is in §12. |
+| D8. A JSON `-0` is read as `0` when the body is parsed (§7.3) | A hand-written `-0` reached the payload as `-$ 0` or `-0%`, which step 4 fails: a 502 on an accepted request. No comparison changes, since `-0` equals `0`. |
+| D10. The per-institution insurance premise and the fund split are cited as the frontend's premise, unsourced (§12) | Neither repo gives a source for them; they say why the limitations matter, so they stay, attributed. |
+| G1b. The 6b1a122 edit placed the three pending §7 rows in pipeline order: the cap, not JSON, schema, engine, range, `asOfDate`, then the model call's rows, the 502 after truncation and before the 500 | The authorization above named the move and no placement. 6b1a122's message states the placement, and the owner accepts it as within the authorization. No row's text changed in that edit. |
+| G5a. A correction of record to b8d61b8's message | It says that es_CO resolves to en-US in Node 22. Measured on 2026-10-29 with Node v22.23.2, es_CO resolves to es-CO, which orders "Banco Ñu" and "Banco Nz" opposite to en-US. Nothing depends on it now: 61f5fcd removed the `localeCompare` tie-break. |
+| SPEC version 1.3; `evals/cases.json` version stays 1; schema `$id` and file stay `.v1.json`; the engine pin is unchanged | No input field, rule list or budget changed, and the §2.2 block is byte-identical. The maturity limit refuses, in the range stage, requests the schema accepts, as the term and principal limits do; all ten cases start in 2027, so no fixture verdict moves. |
+
+### Deferred 2026-10-30
+
+| Decision | Reasoning |
+|---|---|
+| CI, with a job that reports when upstream `main` moves past the pin (§9) | Not built. Such a job would run `npm run test:ci` and a drift check that fetches the pinned commit over the network, since `scripts/verify-vendor.sh` needs the sibling checkout. Until then both checks run by hand. |
 
 ---
 

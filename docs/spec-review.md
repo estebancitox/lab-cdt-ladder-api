@@ -3,7 +3,9 @@
 Date: 2026-09-13. Reviewed artifact: `SPEC.md` and the design behind `evals/cases.json`.
 Revised 2026-10-19 with SPEC v1.1: the case 1 bullet under accepted finding 18 carries a
 correction, and the request-size note at the end is marked as measured under twelve-digit
-principals; nothing else in this record changed.
+principals; nothing else in this record changed. Revised 2026-10-30 with SPEC v1.3: the
+request-size note records the re-measurement with thirteen-digit principals; nothing else
+changed.
 
 This is the record the Decisions section of `SPEC.md` points at. Its purpose is that a
 deferred or rejected finding can be re-read with its reasoning intact rather than
@@ -358,5 +360,8 @@ exactly.
 **Request size.** The largest legal body — 12 rungs, 6 entities, 60-character names, 12-digit
 principals — measures 1.555 bytes, against an 8 KiB cap. Revised 2026-10-19 with SPEC v1.1:
 measured before SPEC §8.5 admitted thirteen-digit principals, and the independent review of
-2026-10-19 could not reproduce the figure (1.558 bytes with a compact serialization); it is
-re-measured in 4B with thirteen digits.
+2026-10-19 could not reproduce the figure (1.558 bytes with a compact serialization). Revised
+2026-10-30 with SPEC v1.3: re-measured on 2026-10-29 with thirteen-digit principals and compact
+`JSON.stringify` (`src/request/validate.test.ts`), the body measures 1.759 bytes with ordinary
+values, 2.015 with the longest number spellings and 5.015 with every id and name character a
+six-byte escape (SPEC §8).
