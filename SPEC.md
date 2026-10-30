@@ -1171,21 +1171,26 @@ comprehension.
   compared separately with the insurance ceiling and with the 60 % concentration threshold,
   whether their names compare equal ("Banco" and "BANCO", which §11.2 credits as one name) or
   not ("Bancolombia" and "Bancolombia S.A."), and the payload hands the model two capitals and
-  two shares where the insurance sees one institution. The frontend warns when two names are
-  equal after trimming and lowercasing, and blocks nothing; the API has no channel for that
+  two shares where, by the product's premise, the insurance sees one institution. The premise,
+  a ceiling per depositor and per institution, is the frontend's, stated without a source at
+  the pinned commit of `../lab-cdt-ladder` (`README.md`, "per depositor per institution";
+  `src/components/ScenarioForm.tsx`, "Por depositante y por entidad") and implied by its
+  `src/ui/form.ts`; this repo asserts no insurance rule (§6). The frontend warns when two names
+  are equal after trimming and lowercasing, and blocks nothing; the API has no channel for that
   warning and refuses nothing on this ground.
-- **The §8 body-size figure predates §8.5.** The 1 555 bytes of the largest legal body were
-  measured for the v1 review of 2026-09-13 with twelve-digit principals, and the independent
-  review of 2026-10-19 measured 1 558 bytes for the same body with a compact serialization.
-  §8.5 admits thirteen-digit principals, at most one more byte per rung. The figure is
-  re-measured in 4B; the 8 KiB cap does not move.
+- **The body cap is what bounds a raw body.** Whitespace is legal JSON, so any legal body padded
+  to 8 KiB is legal; the schema's bounds limit only what the body says. As compact
+  `JSON.stringify` writes it, the largest legal body measured 5 015 bytes at most on 2026-10-29,
+  with every id and name character escaped (§8). The earlier figures, 1 555 bytes for the v1
+  review of 2026-09-13 and 1 558 for the independent review of 2026-10-19, predate the
+  thirteen-digit principals of §8.5.
 - **The output budget is configuration dependent.** `max_tokens` in §8 is sized for a
   text-only reply under the pinned model and thinking setting; a model that always thinks
   spends part of it on thinking, and the row must be re-sized before such a model is pinned.
 - **No signed distance to the ceiling.** A negative COP renders as `-$ 1.234.567`, with the
   minus before the currency symbol; §11.3 step 4 fails that form on its sign, and the view
-  exposes no negative figure in the first place. `excess` and `headroom` carry the direction
-  instead.
+  exposes no negative figure in the first place, not even a signed zero, since a JSON `-0` is
+  read as `0` (§7.3). `excess` and `headroom` carry the direction instead.
 - **`asOfDate` is required and the real clock is never consulted**, so evaluation results are
   reproducible and fixtures do not rot. A ladder whose maturities all precede `asOfDate` is
   rejected rather than explained.
@@ -1197,16 +1202,31 @@ comprehension.
 
 - **Naming a deposit-insurance fund is forbidden, and the prohibition has to live in the
   prompt.** Evaluation cases 1 and 4 name a cooperative. A model with Colombian domain
-  knowledge may correctly volunteer that deposits in cooperatives are covered by a different
-  fund, with a different ceiling, than deposits in banks. That sentence would carry a figure
-  absent from the input and fail `numbers_subset_of_input` **for being right**. Neither case
-  triggers the ceiling risk, so the probability is low, but the contract should not rest on
-  that.
+  knowledge may volunteer that deposits in cooperatives are covered by a different fund, with a
+  different ceiling, than deposits in banks, as the frontend also states without a source
+  (`src/App.tsx` and `src/components/ScenarioForm.tsx` at the pinned commit). That sentence
+  would carry a figure absent from the input and fail `numbers_subset_of_input` **even if it
+  were right**. Neither case triggers the ceiling risk, so the probability is low, but the
+  contract should not rest on that.
 
-  **Requirement for the session-2 system prompt:** the model must never name Fogafín,
+  **Requirement on the system prompt, met by prompt v1:** the model must never name Fogafín,
   Fogacoop or any other deposit-insurance fund, and must never state a figure that is not
   present in the input. The ceiling is whatever the request says it is, and the endpoint
-  asserts nothing about who insures what.
+  asserts nothing about who insures what. `src/model/prompt.v1.ts` states both: every number is
+  a value of the JSON, and no fund, guarantor, regulator or law is named.
+
+- **Interior dots are read loosely.** Step 5 of §11.3 deletes every `.` of a token that is
+  neither a well-formed thousands grouping nor an English decimal, so `1..5` and `1...5` read as
+  15, `1.5.5` as 155 and `12.345.67` as 1234567, and such a token passes when that value is in
+  A. Recorded, not narrowed: none of the 48 stored and paid-run replies has one.
+- **σ and ς stay distinct.** Lowering code point by code point (§11.2) turns Σ into σ wherever it
+  stands, so a name is found wherever it is copied; but a reply that writes in lowercase, with
+  a final ς, a name the request gave in capitals does not mention it, and the reverse holds too.
+- **The day-month-year form still reads some words as months.** Its pattern in §11.3 step 3
+  takes a month by its abbreviation followed by any letters, because D renders that form both
+  abbreviated and whole, so `3 mayores de 1440` is read as a date not in D and fails as
+  invented. v1.3 narrowed the month-alone form to whole names (§13); this one was kept, since
+  its false positive needs a one- or two-digit number before the word.
 
 ---
 
