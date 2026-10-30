@@ -26,10 +26,15 @@ export type ValidationOutcome =
 /** Strict decoding: malformed UTF-8 is not JSON either. */
 const utf8 = new TextDecoder('utf-8', { fatal: true })
 
+/** SPEC §7.3: a JSON `-0` is read as `0`, so no figure derived from it carries a sign. */
+function unsignedZero(_key: string, value: unknown): unknown {
+  return Object.is(value, -0) ? 0 : value
+}
+
 /**
  * Raw request body to validated request, as a pure function. Order, from SPEC §7 and §2.1:
  *   1. the byte cap on the raw body, before any parsing;
- *   2. JSON parse;
+ *   2. JSON parse, a `-0` read as `0`;
  *   3. the draft-07 schema: shape, JSON types, resource bounds;
  *   4. the engine's validateScenario, its issues returned verbatim (§7.2);
  *   5. the per-rung range limits of §8.5, so an out-of-range rung never reaches the arithmetic;
@@ -43,7 +48,7 @@ export function validateRequest(raw: string | Uint8Array): ValidationOutcome {
 
   let parsed: unknown
   try {
-    parsed = JSON.parse(typeof raw === 'string' ? raw : utf8.decode(raw))
+    parsed = JSON.parse(typeof raw === 'string' ? raw : utf8.decode(raw), unsignedZero)
   } catch {
     return refuse('json', 400, 'invalid_input', [
       {

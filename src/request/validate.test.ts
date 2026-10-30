@@ -130,6 +130,27 @@ describe('bodies that are not JSON (plan decision 2)', () => {
   })
 })
 
+describe('a JSON -0 is read as 0 (SPEC §7.3)', () => {
+  it('in the fiscal fields and in a rung, written in any form, as text and as bytes', () => {
+    // JSON.stringify never writes -0, so only a hand-written body carries one.
+    expect(JSON.stringify(-0)).toBe('0')
+    const raw = bodyOf(caseById('healthy-3-rung'))
+      .replace('"retencionRate":0.04', '"retencionRate":-0.0')
+      .replace('"insuranceCeiling":50000000', '"insuranceCeiling":-0')
+      .replace('"ea":0.135', '"ea":-0e3')
+    expect(JSON.parse(raw).ladder.fiscal.insuranceCeiling).toBe(-0)
+    for (const body of [raw, Buffer.from(raw, 'utf8')]) {
+      const outcome = validateRequest(body)
+      if (!outcome.ok) throw new Error('expected the body to be accepted')
+      const { fiscal, rungs } = outcome.request.ladder
+      // toBe compares with Object.is, which tells 0 from -0.
+      expect(fiscal.retencionRate).toBe(0)
+      expect(fiscal.insuranceCeiling).toBe(0)
+      expect(rungs[0].ea).toBe(0)
+    }
+  })
+})
+
 describe('criterion 5: the two asOfDate rules (SPEC §2.1)', () => {
   it('rule 1: a pattern-valid but impossible asOfDate returns 400 invalid_input', () => {
     const body = inputOf('healthy-3-rung')

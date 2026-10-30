@@ -326,6 +326,25 @@ describe('200: the explanation (SPEC §7.1)', () => {
     expect(mocks.create).toHaveBeenCalledTimes(1)
   })
 
+  it('a JSON -0 reaches the model exactly as 0 does, with no signed figure (SPEC §7.3)', async () => {
+    // Truncated, so each request makes one call and the two payloads are calls 0 and 1.
+    mocks.create.mockResolvedValue(reply(REPLY, 'max_tokens'))
+    const signed = CASE_1.replace('"insuranceCeiling":50000000', '"insuranceCeiling":-0').replace(
+      '"ea":0.135',
+      '"ea":-0',
+    )
+    const unsigned = signed.replaceAll(':-0', ':0')
+    expect(unsigned).not.toBe(signed)
+    await handler(post(signed))
+    await handler(post(unsigned))
+    const [fromSigned, fromUnsigned] = mocks.create.mock.calls.map(
+      ([params]) => params.messages[0].content as string,
+    )
+    expect(mocks.create).toHaveBeenCalledTimes(2)
+    expect(fromSigned).toBe(fromUnsigned)
+    expect(fromSigned).not.toMatch(/-\$|"-0/)
+  })
+
   it('decodes a base64 body before measuring, hashing and validating it', async () => {
     mocks.create.mockResolvedValue(reply(PASSING))
     const bytes = Buffer.from(CASE_1, 'utf8')
