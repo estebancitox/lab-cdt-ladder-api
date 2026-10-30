@@ -539,8 +539,12 @@ never writes one, but a hand-written body can, and the schema and the engine acc
 
 ### 7.4 Verification failure
 
-The handler runs the rules of §11 on every model reply before answering 200, with the rule set
-§11.12 derives from the request and the view. When any rule fails, the handler retries the model
+A model call's outcome is a **reply** only when the call ended its turn, stop reason `end_turn`,
+with text that is not blank once its text blocks are joined. The handler runs the rules of §11
+on every reply before answering 200, with the rule set §11.12 derives from the view. Every other
+outcome is answered by its own §7 row without verification: stop reason `max_tokens` by the
+truncated row; any other stop reason, blank text, the deadline, an API error or a transport
+failure by the unavailable row. When any rule fails, the handler retries the model
 call once if, at that moment, the budget of §8.6 leaves at least R; the retry is a fresh sample,
 since `src/model/call.ts` sets no temperature. When no retry is possible, or the retried reply
 also fails, the request ends with 502, `text` set to `UPSTREAM_MESSAGE`, `error.code`
@@ -617,14 +621,43 @@ this channel with an injection string. The guard is described in §11.10 and its
 
 ### 8.4 Logging
 
-Request bodies are never logged: they are someone's savings and their banks. Logs carry a body
-hash, byte size, rung and entity counts, status, latency and, when a model reply arrived, its
-token counts. When a reply fails verification (§7.4), whatever status the request then ends in,
-the line also carries one entry per reply evaluated, in order: the distinct names of the rules
-that reply failed, in the row order of §11.12 and left to right within its flags row, an empty
-entry for a reply that passed, never the reply text and never a rule's argument, which can be an
-entity name. When two model calls were made, the token fields of the line sum both: they are the
-spend. The failure rate is measured from these lines.
+Request bodies are never logged: they are someone's savings and their banks. Each request writes
+one line to standard output, a JSON object with these keys in this order, and nothing that the
+request or a reply contains:
+
+- `requestId`, the Lambda invocation's id, so the line joins the runtime's own START and REPORT
+  records; `null` when the invocation carries none, as a direct invocation with a null payload.
+- `bodyHash`, the SHA-256 in hex of the body as the client sent it, and `bodyBytes`, its size.
+- `rungCount` and `entityCount`, `null` until the pipeline has accepted the body.
+- `status`, and `latencyMs`, the handler's own time rounded to the millisecond.
+- `inputTokens` and `outputTokens`, present when a model call returned usage to the handler,
+  summed over the calls that did. A call that ended at its deadline or in an API or transport
+  error returns none, and neither does one whose reply this service then failed to read, so the
+  fields are the usage reported to the handler, a lower bound of the spend.
+- `failedRules`, present only when a reply failed verification (§7.4), whatever status the
+  request then ends in: one entry per reply evaluated, in order, each the distinct names of the
+  rules that reply failed, in the row order of §11.12 and left to right within its flags row, an
+  empty entry for a reply that passed; never the reply text and never a rule's argument, which
+  can be an entity name.
+- `upstreamError`, present only on a 503, the cause by name: `ssm` and then
+  `ParameterNameMissing`, `ParameterValueMissing` or the exception name of the SSM failure; or
+  `deadline`; `status` and the HTTP status of an API error, or the SDK's class name for one with
+  no status, such as a connection failure; the class of any other transport failure;
+  `stop_reason` and the stop reason; or `empty_reply`.
+- `internalError`, present only on a 500, the class of the error.
+
+No cause field carries an error's message, which can quote the request. The failure rate is
+measured from these lines.
+
+The harness of §10 records two fields per run in `results.json` from this line: `failedRules`,
+as logged or `[]` when the key is absent, and `verificationRetry`, whether a retry was made, both
+`null` when no line was captured; runs recorded before 4B-code have neither field. One entry
+alone is ambiguous: a 502 without a retry, or a retry that ended in a 503 or a 500 before its
+reply was evaluated. So `verificationRetry` is read from the key and the status together: two
+entries, or one entry and a status other than 502. The reading is wrong in one case, which no
+known input reaches and only an injected fault has shown: an error of this service thrown after
+the first reply failed and before the retry was sent ends in a 500 with one entry and no retry,
+and is read as a retry.
 
 ### 8.5 Per-rung range limits
 
@@ -697,15 +730,22 @@ remains of B.
 
 - Every model call's deadline is the smaller of 20 s (`MODEL_DEADLINE_MS` in
   `src/model/call.ts`, SDK retries included) and B minus the elapsed time minus the 50 ms
-  verification threshold below, the elapsed time taken at the instant the call starts. For the
-  first call the 20 s is the smaller operand unless more than 3 950 ms had elapsed by then; the
-  key read, bounded at 3 s by `KEY_FETCH_TIMEOUT_MS` in `src/model/api-key.ts`, leaves 950 ms of
-  that for everything else.
+  verification threshold below, rounded down to the millisecond. The elapsed time is sampled
+  once per call, just before the call: for the first call after the key read, and for a retry
+  after the first reply's verification, where the same sample also decides whether the retry is
+  attempted. For the first call the 20 s is the smaller operand unless more than 3 950 ms had
+  elapsed by then; the key read, bounded at 3 s by `KEY_FETCH_TIMEOUT_MS` in
+  `src/model/api-key.ts`, leaves 950 ms of that for everything else. The deadline's timer starts
+  inside the call, so the code between the sample and the `setTimeout` of `callModel` runs
+  outside the deadline: in `src/handler.ts`, the retry gate and the deadline's computation; in
+  `src/model/call.ts`, the client, built on a container's first call, and the abort controller.
+  That gap has not been measured.
 - B = 24 000 ms is the handler's total budget, strictly below the 25 s Lambda timeout of
   `template.yaml`. A verification retry (§7.4) is attempted only when B minus the elapsed time
-  is at least R. Because no model call runs past B minus 50 ms, a verification within its
-  threshold ends by B. A test with the clock faked, as the existing deadline tests fake it,
-  shows this without a paid run: a first reply that fails verification with B − R = 19 837 ms
+  is at least R. Because every model call's deadline ends by B minus 50 ms, counted from its
+  sample, a verification within its threshold ends by B, up to the unmeasured gap above. A test
+  with the clock faked, as the existing deadline tests fake it, which makes that gap zero, shows
+  this without a paid run: a first reply that fails verification with B − R = 19 837 ms
   elapsed, then a retry that never answers, gets a retry deadline of 4 113 ms and ends in a 503
   `upstream_unavailable` with `latencyMs` 23 950; the test asserts the second call's deadline,
   the status and that latency.
@@ -714,12 +754,14 @@ remains of B.
   remaining gets a deadline equal to the stored p95; 23 of the 24 stored runs finished within
   it, handler and model call together.
 
-The stored figures: on the v1 run of 2026-10-06 (`evals/runs/2026-10-06T19-50-56Z`,
-`runs[].latencyMs`, the 24 runs with a model call; the two refusal runs have none), the
-handler's own latency was min 2 030 ms, p50 2 767 ms, p95 4 113 ms, max 4 676 ms, percentiles
-by nearest rank. `call.ts` sets no temperature, so a retry is a fresh sample, not a repetition.
+The stored run, here and wherever this document says so without a date, is the v1 run of
+2026-10-06 (`evals/runs/2026-10-06T19-50-56Z`, `STORED_RUN` in `src/test-support/contract.ts`),
+and the stored replies are its 24 replies. On its `runs[].latencyMs`, the 24 runs with a model
+call (the two refusal runs have none), the handler's own latency was min 2 030 ms, p50 2 767 ms,
+p95 4 113 ms, max 4 676 ms, percentiles by nearest rank. `call.ts` sets no temperature, so a
+retry is a fresh sample, not a repetition.
 
-Thresholds, fixed here before 4B-code measures anything:
+Thresholds, fixed in v1.2 before 4B-code measured anything:
 
 | Measure | Threshold | How it is shown |
 |---|---|---|
@@ -727,10 +769,26 @@ Thresholds, fixed here before 4B-code measures anything:
 | Total request time | at most B | by the deadline rule above when verification stays within its threshold; the slow-call test above lands at 23 950 ms |
 | Nearest-rank p95 of `runs[].latencyMs` in the paid run of 4B-code, over the runs that answered 200 without a verification retry | at most 6 000 ms | about 1,5× the stored p95 (6 000 / 4 113 = 1,46): model latency varies by day and 24 samples are few |
 
-The no-retry population is read from the handler's log line, which the harness will record per
-run, as §13 owes to 4B-code, not from the counted fetches, which also count the SDK's own
+The no-retry population is read from `verificationRetry`, which the harness records per run from
+the handler's log line (§8.4), not from the counted fetches, which also count the SDK's own
 retries. 2 × p95, about 8,2 s (8 226 ms), is recorded as an alert level for operations, not as a
 done criterion: a legitimate retry with two slow calls exceeds it.
+
+Measured against these thresholds:
+
+- Verification overhead. The test times one evaluation per stored reply, in a single pass with
+  no warm-up, so the figure varies from run to run. Commit e385397 printed min 0,086, p50 0,150,
+  p95 0,596 and max 2,007 ms on 2026-10-28; four runs at 89a37ed on 2026-10-30 printed p95 from
+  0,546 to 0,606 ms (Node v22.23.2).
+- The paid run of 4B-code, `evals/runs/2026-10-29T23-18-30Z`, committed in 2cfca7a: prompt v1
+  through the handler in process on the owner's host, as the stored run was. 26 runs: 24
+  answered 200 with one model call each and 2 answered 400 with none; no verification retry,
+  every run recording `failedRules` `[]` and `verificationRetry` `false`; 245 of 245 verdicts
+  passed. Over the 24 runs answered 200 without a retry, `latencyMs` was min 2 293 ms, p50
+  2 755 ms, p95 3 344 ms and max 3 594 ms by nearest rank: the p95 is 0,56 of the 6 000 ms
+  threshold, all 24 finished within the stored p95 of 4 113 ms, and none reached the alert
+  level. With no retry in the run, selecting by `verificationRetry` or by counted fetches gives
+  the same 24 runs, so the selection rule was not exercised where the two differ.
 
 ---
 
