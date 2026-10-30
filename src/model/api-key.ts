@@ -2,8 +2,9 @@ import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm'
 import { errorCodeName } from '../error-name'
 
 /**
- * SPEC §8 leaves 5 s between the model deadline and the Lambda timeout. Reading the key, which
- * happens once per container, gets a bounded share of them.
+ * SPEC §8.6: the first model call keeps its full 20 s unless more than 3 950 ms have elapsed when
+ * it starts. Reading the key, which happens once per container, gets a bounded 3 s of them and
+ * leaves 950 ms for everything else.
  */
 export const KEY_FETCH_TIMEOUT_MS = 3_000
 

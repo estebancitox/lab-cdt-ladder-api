@@ -130,8 +130,9 @@ async function respond(
     return serviceFailure('upstream_unavailable')
   }
 
-  // SPEC §7.4: every reply is verified before a 200. A failed one is retried once when the
-  // budget leaves at least R; the elapsed time that gates the retry also sets its deadline.
+  // SPEC §7.4: a reply, a call that ended its turn with non-blank text, is verified before a
+  // 200; any other outcome keeps its 503 row unverified. A reply that fails is retried once when
+  // B minus the elapsed time leaves at least R; that elapsed time also sets the retry's deadline.
   const first = await callModel(apiKey, userMessage, callDeadlineMs(elapsedMs()))
   addUsage(line, first.usage)
   if (first.kind !== 'ok') return upstreamFailure(line, first)

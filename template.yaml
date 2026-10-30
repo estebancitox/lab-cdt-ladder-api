@@ -45,7 +45,7 @@ Resources:
       Architectures:
         - arm64
       MemorySize: 256
-      # SPEC 8: strictly greater than the 20 s model deadline.
+      # SPEC 8: strictly greater than the 24 s handler budget B, strictly less than 29 s.
       Timeout: 25
       # At most two requests spend money at the same time. If the account quota refuses this,
       # the setting stays and the quota is what gets fixed.
