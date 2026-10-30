@@ -114,8 +114,9 @@ async function respond(
     truth = groundTruthFrom(request, view)
     rules = deriveRules(view)
   } catch (error) {
-    // The engine refuses by RangeError what it cannot represent in pesos or as a date, and
-    // validateScenario does not reject every such ladder first. The input is the cause: 400.
+    // A guard. The engine refuses by RangeError what it cannot represent in pesos or as a date;
+    // since the §8.5 maturity limit, no validated input is known to reach it. If one does, the
+    // input is the cause: 400.
     if (error instanceof RangeError) return refusal(400, 'invalid_input')
     throw error
   }

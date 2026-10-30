@@ -1,4 +1,4 @@
-import { computeScenario, parseISODate, validateScenario } from '../engine'
+import { computeScenario, dayNumber, parseISODate, validateScenario } from '../engine'
 import {
   ERROR_MESSAGE,
   type ApiIssue,
@@ -12,9 +12,11 @@ import { validateShape, type ExplainRequest } from './schema'
 /** SPEC §8: 8 KiB on the raw body, before parsing. Exactly 8192 bytes passes; 8193 does not. */
 export const MAX_BODY_BYTES = 8 * 1024
 
-/** SPEC §8.5: per-rung operator limits, both inclusive. */
+/** SPEC §8.5: per-rung operator limits, all inclusive. */
 export const MAX_RUNG_DAYS = 3650
 export const MAX_RUNG_PRINCIPAL = 1e12
+/** The last date the engine's four-digit years can carry, so the latest maturity a rung can have. */
+export const MAX_MATURITY_DATE = '9999-12-31'
 
 /** Which stage refused the body. A stage sees the body only if every earlier one accepted it. */
 export type Stage = 'cap' | 'json' | 'schema' | 'engine' | 'range' | 'asOfDate'
@@ -83,9 +85,14 @@ export function validateRequest(raw: string | Uint8Array): ValidationOutcome {
   return { ok: true, request }
 }
 
-/** One issue per offending field of every offending rung, in the engine's field order. */
+/**
+ * One issue per offending field of every offending rung, in the engine's field order. A term over
+ * its own limit is not also checked against the maturity limit, so no field carries two issues.
+ */
 function checkRanges(request: ExplainRequest): ApiIssue[] {
   const issues: ApiIssue[] = []
+  // Day numbers, not strings: '10000-01-01' sorts before '9999-12-31'.
+  const daysToLimit = dayNumber(MAX_MATURITY_DATE) - dayNumber(request.ladder.startDate)
   request.ladder.rungs.forEach((rung, i) => {
     if (rung.principal > MAX_RUNG_PRINCIPAL) {
       issues.push({
@@ -101,6 +108,13 @@ function checkRanges(request: ExplainRequest): ApiIssue[] {
         code: 'days_out_of_range',
         path: `rungs[${i}].days`,
         message: 'El plazo no puede superar 3.650 días.',
+      })
+    } else if (rung.days > daysToLimit) {
+      issues.push({
+        source: 'api',
+        code: 'maturity_out_of_range',
+        path: `rungs[${i}].days`,
+        message: 'El vencimiento no puede ser posterior al 31 de diciembre de 9999.',
       })
     }
   })
@@ -122,7 +136,8 @@ function checkAsOfDate(request: ExplainRequest): ApiIssue[] {
     ]
   }
   // Rule 2: not after the last maturity. computeScenario sorts by maturity, so the last rung
-  // carries it. Valid ISO dates compare correctly as strings, as the engine itself relies on.
+  // carries it. The range stage keeps every maturity within four-digit years, where valid ISO
+  // dates compare correctly as strings, as the engine itself relies on.
   const { rungs } = computeScenario(request.ladder)
   const lastMaturity = rungs[rungs.length - 1].maturityDate
   if (request.asOfDate > lastMaturity) {

@@ -211,10 +211,15 @@ describe('the SPEC §7 table is the list of rows this file covers', () => {
       ['Body that is not JSON (§7.3)', 400, 'ERROR_MESSAGE', 'invalid_input'],
       ['Schema violation', 400, 'ERROR_MESSAGE', 'invalid_input'],
       ['Engine validation failure', 400, 'ERROR_MESSAGE', 'invalid_input'],
-      ["A rung's days or principal over a §8.5 limit", 400, 'ERROR_MESSAGE', 'invalid_input'],
+      [
+        "A rung's days, principal or maturity over a §8.5 limit",
+        400,
+        'ERROR_MESSAGE',
+        'invalid_input',
+      ],
       ['asOfDate invalid or after the last maturity', 400, 'ERROR_MESSAGE', 'invalid_input'],
       [
-        'Model unavailable, overloaded or timed out',
+        'Model unavailable, overloaded or timed out, or its API key unreadable',
         503,
         'UPSTREAM_MESSAGE',
         'upstream_unavailable',
@@ -543,21 +548,42 @@ describe('rows 2 to 6: every 400 is ERROR_MESSAGE, invalid_input, and no model c
     ])
   })
 
-  it('a ladder inside the limits the engine cannot date, thrown while the view is built', async () => {
-    // From a start in 9999, a 3650-day term matures in 10008, a five-digit year the engine's own
-    // date parser rejects. Sorted as a string it comes first, so asOfDate rule 2 compares
-    // against another rung's maturity and lets the request through to the view.
+  it('row 5, a maturity past 9999-12-31 is refused by the range stage, before the view', async () => {
+    // From 9999-01-01 a 3650-day term matures in 10008, a five-digit year the engine's own date
+    // parser rejects. Sorted as a string it would come first, so asOfDate rule 2 would compare
+    // against another rung's maturity and let the request through to the view, which throws.
     const input = inputOf('healthy-3-rung')
     input.asOfDate = '9999-01-01'
     input.ladder.startDate = '9999-01-01'
     input.ladder.rungs[2].days = MAX_RUNG_DAYS
+    expect(addDays(input.ladder.startDate, MAX_RUNG_DAYS)).toBe('10008-12-29')
     const raw = JSON.stringify(input)
-    const outcome = validateRequest(raw)
-    expect(outcome.ok).toBe(true)
-    if (outcome.ok) expect(() => buildExplanationView(outcome.request)).toThrow(RangeError)
+    expect(validateRequest(raw)).toMatchObject({ ok: false, stage: 'range' })
     const { body, line } = await expectInvalid(post(raw))
-    expect(body.error.issues).toEqual([])
-    expect(line).toMatchObject({ rungCount: 3, entityCount: 3 })
+    expect(body.error.issues.map((i: { code: string; path: string }) => [i.code, i.path])).toEqual([
+      ['maturity_out_of_range', 'rungs[2].days'],
+    ])
+    expect(line).toMatchObject({ rungCount: null, entityCount: null })
+  })
+
+  it('row 4 covers the guard: a RangeError from the engine after validation is a 400', async () => {
+    // Since the §8.5 maturity limit no validated input is known to reach the guard, so the
+    // engine's throw is injected into the view.
+    vi.doMock('./explain', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('./explain')>()),
+      buildExplanationView: () => {
+        throw new RangeError('injected')
+      },
+    }))
+    try {
+      vi.resetModules()
+      ;({ handler } = await import('./handler'))
+      const { body, line } = await expectInvalid(post(CASE_1))
+      expect(body.error.issues).toEqual([])
+      expect(line).toMatchObject({ rungCount: 3, entityCount: 3 })
+    } finally {
+      vi.doUnmock('./explain')
+    }
   })
 })
 

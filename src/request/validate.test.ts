@@ -11,7 +11,13 @@ import {
 } from '../test-support/contract'
 import { ERROR_MESSAGE } from './errors'
 import { validateShape } from './schema'
-import { MAX_BODY_BYTES, MAX_RUNG_DAYS, MAX_RUNG_PRINCIPAL, validateRequest } from './validate'
+import {
+  MAX_BODY_BYTES,
+  MAX_MATURITY_DATE,
+  MAX_RUNG_DAYS,
+  MAX_RUNG_PRINCIPAL,
+  validateRequest,
+} from './validate'
 
 function refused(raw: string | Uint8Array) {
   const outcome = validateRequest(raw)
@@ -217,12 +223,68 @@ describe('the per-rung range stage (SPEC §8.5)', () => {
     path: `rungs[${i}].days`,
     message: 'El plazo no puede superar 3.650 días.',
   })
+  const maturityIssue = (i: number) => ({
+    source: 'api',
+    code: 'maturity_out_of_range',
+    path: `rungs[${i}].days`,
+    message: 'El vencimiento no puede ser posterior al 31 de diciembre de 9999.',
+  })
+  /** Case 1 started on `startDate`, every rung with the term `days`, asOfDate the start. */
+  function startingOn(startDate: string, days: number): RawRequest {
+    const body = inputOf('healthy-3-rung')
+    body.asOfDate = startDate
+    body.ladder.startDate = startDate
+    for (const rung of body.ladder.rungs) rung.days = days
+    return body
+  }
 
   it('the limits are the SPEC §8 rows', () => {
     expect(SPEC_MD).toContain('| Rung term `days` | at most 3650 |')
     expect(SPEC_MD).toContain('| Rung `principal` | at most 1e12 pesos |')
+    expect(SPEC_MD).toContain('| Rung maturity, `startDate` plus `days` | at most 9999-12-31 |')
     expect(MAX_RUNG_DAYS).toBe(3650)
     expect(MAX_RUNG_PRINCIPAL).toBe(1e12)
+    expect(MAX_MATURITY_DATE).toBe('9999-12-31')
+  })
+
+  it('the maturity limit is inclusive, at the longest term and at the shortest', () => {
+    // 9990-01-03 is the earliest start from which a 3650-day term passes 9999-12-31.
+    expect(addDays('9990-01-02', MAX_RUNG_DAYS)).toBe(MAX_MATURITY_DATE)
+    expect(addDays('9990-01-03', MAX_RUNG_DAYS)).toBe('10000-01-01')
+    expect(validateRequest(JSON.stringify(startingOn('9990-01-02', MAX_RUNG_DAYS))).ok).toBe(true)
+    const longest = refused(JSON.stringify(startingOn('9990-01-03', MAX_RUNG_DAYS)))
+    expect(longest.stage).toBe('range')
+    expect(longest.status).toBe(400)
+    expect(longest.body.error).toEqual({
+      code: 'invalid_input',
+      issues: [maturityIssue(0), maturityIssue(1), maturityIssue(2)],
+    })
+    expectErrorMessageBytes(longest.body.text)
+
+    expect(validateRequest(JSON.stringify(startingOn('9999-12-30', 1))).ok).toBe(true)
+    expect(refused(JSON.stringify(startingOn('9999-12-31', 1))).body.error.issues).toEqual([
+      maturityIssue(0),
+      maturityIssue(1),
+      maturityIssue(2),
+    ])
+  })
+
+  it('a term over its own limit gets only the term issue, never the maturity issue too', () => {
+    const body = startingOn('9999-01-01', 90)
+    body.ladder.rungs[1].days = MAX_RUNG_DAYS + 1
+    expect(refused(JSON.stringify(body)).body.error.issues).toEqual([daysIssue(1)])
+  })
+
+  it('issues come by rung, the principal before the term or the maturity within a rung', () => {
+    // From 9999-06-01, 300 days matures in 10000; 90 days stays in 9999.
+    const body = startingOn('9999-06-01', 90)
+    Object.assign(body.ladder.rungs[0], { principal: MAX_RUNG_PRINCIPAL + 1, days: 300 })
+    body.ladder.rungs[2].days = MAX_RUNG_DAYS + 1
+    expect(refused(JSON.stringify(body)).body.error.issues).toEqual([
+      principalIssue(0),
+      maturityIssue(0),
+      daysIssue(2),
+    ])
   })
 
   it('both limits are inclusive', () => {

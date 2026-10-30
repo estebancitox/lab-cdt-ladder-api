@@ -75,8 +75,8 @@ not know about:
 2. `asOfDate` must not fall after the last maturity in the ladder. A fully matured ladder is a
    different explanation and is out of scope for v1.
 
-The per-rung term and principal limits of §8.5 are operator limits, not domain rules; they
-leave this count at two.
+The per-rung limits of §8.5, on term, principal and maturity, are operator limits, not domain
+rules; they leave this count at two.
 
 ### 2.2 Schema (JSON Schema draft-07)
 
@@ -419,7 +419,7 @@ no session and no client state precisely because that is the version where ident
 
 ## 7. Error behavior
 
-Every error path is a row of the two tables below, with a fixed status and `error.code`. None of
+Every error path is a row of the table below, with a fixed status and `error.code`. None of
 them ever returns a 200 with a templated explanation, because a template that looks like an
 explanation would quietly satisfy every evaluation rule.
 
@@ -429,9 +429,9 @@ explanation would quietly satisfy every evaluation rule.
 | Body that is not JSON (§7.3) | 400 | `ERROR_MESSAGE` | `invalid_input` |
 | Schema violation | 400 | `ERROR_MESSAGE` | `invalid_input` |
 | Engine validation failure | 400 | `ERROR_MESSAGE` | `invalid_input` |
-| A rung's `days` or `principal` over a §8.5 limit | 400 | `ERROR_MESSAGE` | `invalid_input` |
+| A rung's `days`, `principal` or maturity over a §8.5 limit | 400 | `ERROR_MESSAGE` | `invalid_input` |
 | `asOfDate` invalid or after the last maturity | 400 | `ERROR_MESSAGE` | `invalid_input` |
-| Model unavailable, overloaded or timed out | 503 | `UPSTREAM_MESSAGE` | `upstream_unavailable` |
+| Model unavailable, overloaded or timed out, or its API key unreadable | 503 | `UPSTREAM_MESSAGE` | `upstream_unavailable` |
 | Model response truncated at `max_tokens` | 503 | `UPSTREAM_MESSAGE` | `upstream_truncated` |
 | Model reply failed verification (§7.4), with no time for a retry or on the retry too | 502 | `UPSTREAM_MESSAGE` | `verification_failed` |
 | Unexpected internal error | 500 | `UPSTREAM_MESSAGE` | `internal_error` |
@@ -445,6 +445,14 @@ UPSTREAM_MESSAGE  No puedo explicar esta escalera en este momento: el servicio n
 
 On every 400 path the model is **never called**. Validation runs first and short-circuits. On
 the 502 path the model was called once or twice, and no reply it gave is returned.
+
+Two rows cover more than their condition names. The engine validation row also covers a
+`RangeError`, the engine's refusal of what it cannot represent in pesos or as a date, thrown
+while the request is validated or while its view, ground truth and derived rules are built: a
+400 with an empty `issues` array. It is a guard: since the maturity limit of §8.5, no validated
+input is known to reach it. The API key is unreadable when the parameter name is missing from
+the environment, when the parameter holds no value, or when reading it from SSM fails; the
+client sees the same 503 as for a model outage, and the log line tells them apart (§8.4).
 
 ### 7.1 Response shapes
 
@@ -511,15 +519,23 @@ field. Two notes:
 The API's own rules produce a third issue source, and the verification of §7.4 a fourth, so an
 issue's `source` is one of `schema`, `engine`, `api` and `verification`. An API issue is
 `{ source: "api", code, path, message }`: `source` is the string `api`, `code` names the rule,
-`path` is the offending field, and `message` is a Spanish sentence for the client. The code has
-emitted three instances since session 2. Two are the `asOfDate` rules of §2.1,
-`as_of_date_invalid` and `as_of_date_after_last_maturity`, both at path `asOfDate`, under the
-`asOfDate` row of the table above with `error.code` `invalid_input`. The third is
-`invalid_json`, for a body that is not JSON, at the empty path `""` with the message "El cuerpo
-de la solicitud no es JSON válido.",
-also a 400 `invalid_input`; its row is in the second table of §7, pending 4B-code. The per-rung
-range codes of §8.5 use this shape. A verification issue has its own shape, defined in §7.4:
-`{ source: "verification", rule }`, with no code, path or message.
+`path` is the offending field, and `message` is a Spanish sentence for the client. There are six
+codes, each a 400 with `error.code` `invalid_input`, under the row of the table above named here:
+
+- `invalid_json`, for a body that is not JSON, at the empty path `""` with the message "El cuerpo
+  de la solicitud no es JSON válido.", under the not-JSON row;
+- `principal_out_of_range`, `days_out_of_range` and `maturity_out_of_range`, the per-rung limits
+  of §8.5, which gives their paths and messages, under the §8.5 row;
+- `as_of_date_invalid` and `as_of_date_after_last_maturity`, the `asOfDate` rules of §2.1, both
+  at path `asOfDate`, under the `asOfDate` row.
+
+A verification issue has its own shape, defined in §7.4: `{ source: "verification", rule }`,
+with no code, path or message.
+
+A JSON `-0` is read as `0` when the body is parsed, before the schema runs. `JSON.stringify`
+never writes one, but a hand-written body can, and the schema and the engine accept it wherever
+`0` is legal; read as written, it would reach the model as a signed figure such as `-$ 0` or
+`-0%`, which §11.3 step 4 does not allow in a reply.
 
 ### 7.4 Verification failure
 
@@ -551,7 +567,8 @@ production is not loosened: the response is a retry, a 502 and a logged name.
 | Entity name | 60 characters | mirrors the frontend serializer; **rejected, never truncated** (§8.1) |
 | Rung term `days` | at most 3650 | per-rung operator limit (§8.5); refused with the API issue code `days_out_of_range` before any engine arithmetic |
 | Rung `principal` | at most 1e12 pesos | per-rung operator limit (§8.5); refused with `principal_out_of_range` before any engine arithmetic |
-| Request body | 8 KiB | the largest legal body measured 1 555 bytes with twelve-digit principals, before §8.5 admitted thirteen; re-measured in 4B (§12); roughly 5× headroom |
+| Rung maturity, `startDate` plus `days` | at most 9999-12-31 | per-rung operator limit (§8.5): the last date the engine's four-digit years carry; refused with `maturity_out_of_range` before the ladder is computed |
+| Request body | 8 KiB | the largest legal body as compact `JSON.stringify` writes it, every bound of §2.2 and §8.5 at its maximum, measured on 2026-10-29 (`src/request/validate.test.ts`): 1 759 bytes with ordinary values, 2 015 with the longest number spellings, 5 015 with every id and name character a six-byte escape; headroom 4,66×, 4,07× and 1,63×. Whitespace is legal JSON, so in raw bytes the largest legal body is the cap itself |
 | Model call | abort at 20 s | the first operand of every model call's deadline (§8.6); SDK retries included (`MODEL_DEADLINE_MS` in `src/model/call.ts`) |
 | Handler budget B | 24 000 ms | §8.6; no model call runs past B minus the verification threshold, and the handler answers by B when verification stays within that threshold |
 | Retry threshold R | 4 163 ms | §8.6; the stored p95 of 4 113 ms plus the 50 ms verification threshold; a verification retry starts only when at least R of B remains |
@@ -611,26 +628,35 @@ spend. The failure rate is measured from these lines.
 
 ### 8.5 Per-rung range limits
 
-Two per-rung limits bound what the engine is asked to compute: `days` at most 3650 and
-`principal` at most 1e12 pesos, both inclusive. They are operator limits, not domain rules:
-the engine accepts any positive integer term and any positive safe-integer principal, and the
-two `asOfDate` rules of §2.1 remain the API's only domain rules.
+Three per-rung limits bound what the engine is asked to compute: `days` at most 3650,
+`principal` at most 1e12 pesos, and the maturity, `startDate` plus `days`, at most 9999-12-31,
+all inclusive. They are operator limits, not domain rules: the engine accepts any positive
+integer term and any positive safe-integer principal, and the two `asOfDate` rules of §2.1
+remain the API's only domain rules.
 
 The check is a stage of the §7 pipeline, between the engine stage and the `asOfDate` stage. It
 runs only when the engine's `validateScenario` returned no issues, and it precedes the whole
 `asOfDate` stage, both of its rules, not only the rule that first calls `computeScenario`: a
 stage does not sit between two rules of another stage. So an out-of-range rung never reaches the
 arithmetic, and, like every stage, when this one finds issues it ends the request and no later
-stage runs. It reports one issue per offending field of every offending rung, so a rung over
-both limits yields two issues, as the schema stage lists every violation rather than the first.
-An out-of-range rung is the existing `invalid_input` condition of §7: a 400 with the fixed
-`text`, and issues in the API issue shape of §7.3, `source: "api"`, the code
-`days_out_of_range` or `principal_out_of_range`, the rung's path in the engine's form
-(`rungs[i].days`, `rungs[i].principal`) and a Spanish message. The message text is fixed in
-4B-code alongside the code, as the `asOfDate` messages were. The two codes are new, and so is
-their §7 row, written in the second table of §7 pending 4B-code.
+stage runs. It reports one issue per offending field of every offending rung, so a rung over the
+principal limit and a term or maturity limit yields two issues, as the schema stage lists every
+violation rather than the first. The maturity limit is checked only for a term within 3650 days,
+so a term over 3650 days carries `days_out_of_range` alone and no field carries two issues.
+Issues come by rung, in the request's order, and within a rung the principal's issue comes
+before the term's, the engine's field order. An out-of-range rung is the `invalid_input`
+condition of the range row of §7: a 400 with the fixed `text`, and issues in the API issue shape
+of §7.3, `source: "api"`, with these codes, paths in the engine's form, and messages:
 
-The numbers were measured on 2026-10-16 rather than chosen (§13). A single rung at both limits
+- `principal_out_of_range` at `rungs[i].principal`: "El monto no puede superar 1.000.000.000.000
+  pesos."
+- `days_out_of_range` at `rungs[i].days`: "El plazo no puede superar 3.650 días."
+- `maturity_out_of_range` at `rungs[i].days`: "El vencimiento no puede ser posterior al 31 de
+  diciembre de 9999." The path is the term's because the limit is per rung: `startDate` is shared
+  by every rung, and a start in 9999 with a short term is legal.
+
+The term and principal numbers were measured on 2026-10-16 rather than chosen (§13). A single
+rung at both of those limits
 is exact at every rate the engine accepts: no NaN, no Infinity, integer pesos below 2^53, and
 one token after normalization. Twelve rungs of 1e12 at the engine's 100 % rate ceiling over
 3650 days push the ladder's totals and a single entity's exposure past 2^53, by about 1,5× on
@@ -638,9 +664,9 @@ base 360 and 1,36× on base 365, and no guard catches it (§12). At 13,5 % the s
 a margin of about 288× on base 360 and 295× on base 365 on the ladder's gross total, and about
 208× and 212× on the single entity's exposure.
 
-Raising either limit requires re-measuring exactness under the three criteria of the paragraph
-above, no NaN or Infinity, integer pesos below 2^53, one token after normalization, before the
-new value is written. Market context, read on 2026-10-23 from eleven institutions' own product
+Raising the term or the principal limit requires re-measuring exactness under the three criteria
+of the paragraph above, no NaN or Infinity, integer pesos below 2^53, one token after
+normalization, before the new value is written. Market context, read on 2026-10-23 from eleven institutions' own product
 pages, simulators or rate sheets, the full list in §13: the longest stated maximum CDT term
 found was Davivienda's 2 880 days, and the usual range was 720 to 1 440 days. The 3 650-day
 limit sits above every offer found, about 1,3× the longest, so it is an arithmetic bound with
@@ -650,6 +676,18 @@ with twelve rungs of 1e12 at the 100 % rate ceiling, `totals.grossInterest` is
 d = 3 488 on base 365, the closed form d = base · log2(1 + 2^53 / 12e12) giving 3 439,4 and
 3 487,1; the single entity's exposure, 12e12 more, crosses one day earlier on each base. This
 is consistent with the 1,5× and 1,36× measured at 3 650.
+
+The maturity limit is not a measurement but the engine's own date range. `parseISODate` reads
+exactly four year digits, while `toISODate`, which `addDays` uses, pads the year to at least four
+and so writes five past 9999 (`src/engine/dates.ts`): a later maturity is a date the engine
+cannot read back. Until v1.3 such a rung passed the range stage, and its request ended in a 400
+for the wrong reason, never with a model call: the view threw a `RangeError` on the five-digit
+date, answered by the guard of §7 with no issues, unless `asOfDate` rule 2 refused first with a
+false `as_of_date_after_last_maturity`. `computeScenario` sorts maturities as strings, where
+`10000-01-01` sorts before `9999-12-31`, so rule 2 could compare against the wrong rung; the
+check compares day numbers instead, for the same reason. With terms of at most 3650 days, the
+earliest start from which a rung can pass the limit is 9990-01-03, maturing on 10000-01-01; a
+1-day term passes it from 9999-12-31.
 
 ### 8.6 Time budget and verification thresholds
 

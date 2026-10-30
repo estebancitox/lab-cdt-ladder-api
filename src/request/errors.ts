@@ -31,6 +31,7 @@ export type ApiIssueCode =
   | 'invalid_json'
   | 'principal_out_of_range'
   | 'days_out_of_range'
+  | 'maturity_out_of_range'
   | 'as_of_date_invalid'
   | 'as_of_date_after_last_maturity'
 
