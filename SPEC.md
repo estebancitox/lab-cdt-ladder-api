@@ -405,7 +405,9 @@ Not prose, not a partial explanation, and not a 200. See §7.
 - No market data, no live rates, no current fiscal figures. Withholding and the insurance
   ceiling are inputs, never facts the service asserts.
 - No multi-turn conversation. One request, one explanation.
-- No authentication and no per-user state in v1.
+- No end-user authentication and no per-user state in v1. The deployment is private all the
+  same, until §8.2's controls exist: its Function URL takes only requests signed with AWS
+  credentials (`AuthType: AWS_IAM` in `template.yaml`), which name an AWS principal, not a user.
 - No rollover. The frontend can project renewals; this endpoint explains one ladder at its
   initial terms. A body carrying `rollover` is rejected by `additionalProperties: false`.
 
@@ -579,6 +581,7 @@ production is not loosened: the response is a retry, a 502 and a logged name.
 | Lambda timeout | 25 s | strictly greater than B, strictly less than the next row |
 | API Gateway integration | 29 s hard cap | applies only if fronted by API Gateway REST |
 | `max_tokens` | 600 | a 200-word Spanish reply is roughly 320 tokens; truncation is a failure, not a response |
+| Concurrent executions | 2 | `ReservedConcurrentExecutions` in `template.yaml`: at most two requests spend money at the same time (§8.2) |
 
 The byte cap is enforced on `Content-Length` and on the raw body **before** parsing. It is not
 delegated to the platform's own multi-megabyte limit.
@@ -604,14 +607,16 @@ The cap lives in the frontend *serializer*, not in the engine, so the API adopti
 
 ### 8.2 Abuse and spend — specified, not built
 
-v1 ships no authentication (§6). That leaves an unauthenticated endpoint that spends money per
-request, so two controls are specified now and built before any public deployment:
+v1 ships no end-user authentication (§6). A public endpoint would spend money per request for
+anyone who calls it, so two controls are specified now and built before any public deployment:
 
 - A per-IP rate limit at the edge.
 - A daily spend alarm on the model account, with a hard monthly budget cap.
 
 Both are stopgaps for the absence of identity. They are replaced by per-user limits in the
-v2 line named in §6.1.
+v2 line named in §6.1. Until they exist the deployment is not public: the Function URL takes
+only requests signed with AWS credentials (`AuthType: AWS_IAM`, §6), and
+`ReservedConcurrentExecutions: 2` keeps at most two requests spending at the same time (§8).
 
 ### 8.3 Untrusted text
 
@@ -810,22 +815,28 @@ no entry point. Publishing the engine properly means restructuring the frontend 
 with a build and a release pipeline, which is a large change to a repo this project only reads.
 
 **The tradeoff is real**: a copy can drift. Three mechanisms make drift detectable rather than
-hypothetical.
+hypothetical, and a fourth, specified at v1, is not built.
 
 1. **A pin.** `src/engine/VENDOR.md` records the upstream URL, the commit SHA
    (`6444d05df4385343d5593b94d9e5822cad647e10`), the vendoring date, and a SHA-256 per file.
-2. **The upstream tests are vendored too** — 917 lines across 8 files — and run in this repo's
-   CI on every push. They carry the real-world reproduction fixtures, so "it is the same code"
-   is a test result rather than a claim.
-3. **A drift job.** CI re-fetches the pinned SHA and fails on any difference against the
-   vendored copy. Separately it reports, without failing, when upstream `main` has moved past
-   the pin, so bumping is a deliberate act rather than a surprise.
+   `src/vendor.test.ts` re-hashes the vendored files against that record on every test run,
+   with no sibling checkout needed.
+2. **The upstream tests are vendored too** — 917 lines across 8 files — and run with this repo's
+   test suite, `npm test` and `npm run test:ci`. They carry the real-world reproduction
+   fixtures, so "it is the same code" is a test result rather than a claim.
+3. **A manual drift check.** `npm run verify:vendor` (`scripts/verify-vendor.sh`) compares the
+   vendored copy with the pinned commit's objects in the sibling checkout `../lab-cdt-ladder`,
+   offline, by file set, blob id and SHA-256, and fails on any difference. It runs when someone
+   runs it; it fetches nothing.
+4. **Not built: CI and an upstream watch.** The repo has no CI, so nothing runs the tests or the
+   drift check on a push, and nothing reports when upstream `main` moves past the pin. Until it
+   exists, a bump is noticed by reading upstream, and both checks run by hand (§13, Deferred).
 
 **When a formula changes upstream**: bump the pin, re-vendor code and tests, run the vendored
 tests, then re-run the evaluation suite. Any fixture whose numbers moved is re-baselined by
 re-deriving it. Fixture numbers follow the engine. Evaluation thresholds and rules do not move.
 
-`src/explain/` is this repo's own code and is not vendored, so the drift job covers only
+`src/explain/` is this repo's own code and is not vendored, so the drift checks cover only
 `src/engine/`.
 
 ---
