@@ -566,25 +566,33 @@ describe('rows 2 to 6: every 400 is ERROR_MESSAGE, invalid_input, and no model c
     expect(line).toMatchObject({ rungCount: null, entityCount: null })
   })
 
-  it('row 4 covers the guard: a RangeError from the engine after validation is a 400', async () => {
-    // Since the §8.5 maturity limit no validated input is known to reach the guard, so the
-    // engine's throw is injected into the view.
-    vi.doMock('./explain', async (importOriginal) => ({
-      ...(await importOriginal<typeof import('./explain')>()),
-      buildExplanationView: () => {
-        throw new RangeError('injected')
-      },
-    }))
-    try {
-      vi.resetModules()
-      ;({ handler } = await import('./handler'))
-      const { body, line } = await expectInvalid(post(CASE_1))
-      expect(body.error.issues).toEqual([])
-      expect(line).toMatchObject({ rungCount: 3, entityCount: 3 })
-    } finally {
-      vi.doUnmock('./explain')
-    }
-  })
+  it.each([
+    ['./request/validate', 'validateRequest', null],
+    ['./explain', 'buildExplanationView', 3],
+    ['./rules', 'groundTruthFrom', 3],
+    ['./rules', 'deriveRules', 3],
+  ] as const)(
+    'row 4 covers the guard: a RangeError thrown by %s %s is a 400 with no issues',
+    async (path, name, count) => {
+      // Since the §8.5 maturity limit no validated input is known to reach the guard, so the
+      // engine's throw is injected, at each call the guard covers (SPEC §7).
+      vi.doMock(path, async (importOriginal) => ({
+        ...(await importOriginal<Record<string, unknown>>()),
+        [name]: () => {
+          throw new RangeError('injected')
+        },
+      }))
+      try {
+        vi.resetModules()
+        ;({ handler } = await import('./handler'))
+        const { body, line } = await expectInvalid(post(CASE_1))
+        expect(body.error.issues).toEqual([])
+        expect(line).toMatchObject({ rungCount: count, entityCount: count })
+      } finally {
+        vi.doUnmock(path)
+      }
+    },
+  )
 })
 
 describe('row 7: model unavailable, overloaded or timed out → 503 upstream_unavailable', () => {

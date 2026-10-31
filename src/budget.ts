@@ -14,8 +14,9 @@ export const RETRY_THRESHOLD_MS = STORED_P95_MS + VERIFICATION_THRESHOLD_MS
 
 /**
  * SPEC §8.6: a model call's deadline, the smaller of 20 s and B minus the elapsed time minus the
- * verification threshold, with the elapsed time taken at the instant the call starts. Rounded
- * down to whole milliseconds, so no call runs past B minus the threshold.
+ * verification threshold, with the elapsed time sampled just before the call. Rounded down to
+ * whole milliseconds, so no call's deadline runs past B minus the threshold, counted from that
+ * sample; the setup before the call's timer starts is outside it (not measured).
  */
 export function callDeadlineMs(elapsedMs: number): number {
   return Math.floor(

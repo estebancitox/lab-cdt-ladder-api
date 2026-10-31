@@ -577,7 +577,7 @@ production is not loosened: the response is a retry, a 502 and a logged name.
 | Rung maturity, `startDate` plus `days` | at most 9999-12-31 | per-rung operator limit (§8.5): the last date the engine's four-digit years carry; refused with `maturity_out_of_range` before the ladder is computed |
 | Request body | 8 KiB | the largest legal body as compact `JSON.stringify` writes it, every bound of §2.2 and §8.5 at its maximum, measured on 2026-10-29 (`src/request/validate.test.ts`): 1 759 bytes with ordinary values, 2 015 with the longest number spellings, 5 015 with every id and name character a six-byte escape; headroom 4,66×, 4,07× and 1,63×. Whitespace is legal JSON, so in raw bytes the largest legal body is the cap itself |
 | Model call | abort at 20 s | the first operand of every model call's deadline (§8.6); SDK retries included (`MODEL_DEADLINE_MS` in `src/model/call.ts`) |
-| Handler budget B | 24 000 ms | §8.6; no model call runs past B minus the verification threshold, and the handler answers by B when verification stays within that threshold |
+| Handler budget B | 24 000 ms | §8.6; no model call's deadline runs past B minus the verification threshold, counted from its elapsed sample, and the handler answers by B when verification stays within that threshold, up to the setup gap §8.6 names as not measured |
 | Retry threshold R | 4 163 ms | §8.6; the stored p95 of 4 113 ms plus the 50 ms verification threshold; a verification retry starts only when at least R of B remains |
 | Lambda timeout | 25 s | strictly greater than B, strictly less than the next row |
 | API Gateway integration | 29 s hard cap | applies only if fronted by API Gateway REST |
@@ -632,7 +632,7 @@ one line to standard output, a JSON object with these keys in this order, and no
 request or a reply contains:
 
 - `requestId`, the Lambda invocation's id, so the line joins the runtime's own START and REPORT
-  records; `null` when the invocation carries none, as a direct invocation with a null payload.
+  records; `null` when the handler is called without a context that carries one.
 - `bodyHash`, the SHA-256 in hex of the body as the client sent it, and `bodyBytes`, its size.
 - `rungCount` and `entityCount`, `null` until the pipeline has accepted the body.
 - `status`, and `latencyMs`, the handler's own time rounded to the millisecond.
@@ -695,18 +695,18 @@ of §7.3, `source: "api"`, with these codes, paths in the engine's form, and mes
   by every rung, and a start in 9999 with a short term is legal.
 
 The term and principal numbers were measured on 2026-10-16 rather than chosen (§13). A single
-rung at both of those limits
-is exact at every rate the engine accepts: no NaN, no Infinity, integer pesos below 2^53, and
-one token after normalization. Twelve rungs of 1e12 at the engine's 100 % rate ceiling over
-3650 days push the ladder's totals and a single entity's exposure past 2^53, by about 1,5× on
-base 360 and 1,36× on base 365, and no guard catches it (§12). At 13,5 % the same ladder keeps
-a margin of about 288× on base 360 and 295× on base 365 on the ladder's gross total, and about
-208× and 212× on the single entity's exposure.
+rung at both of those limits is exact at every rate the engine accepts: no NaN, no Infinity,
+integer pesos below 2^53, and one token after normalization. Twelve rungs of 1e12 at the
+engine's 100 % rate ceiling over 3650 days push the ladder's totals and a single entity's
+exposure past 2^53, by about 1,5× on base 360 and 1,36× on base 365, and no guard catches it
+(§12). At 13,5 % the same ladder keeps a margin of about 288× on base 360 and 295× on base 365
+on the ladder's gross total, and about 208× and 212× on the single entity's exposure.
 
 Raising the term or the principal limit requires re-measuring exactness under the three criteria
 of the paragraph above, no NaN or Infinity, integer pesos below 2^53, one token after
-normalization, before the new value is written. Market context, read on 2026-10-23 from eleven institutions' own product
-pages, simulators or rate sheets, the full list in §13: the longest stated maximum CDT term
+normalization, before the new value is written. Market context, read on 2026-10-23 from eleven
+institutions' own product pages, simulators or rate sheets, the full list in §13: the longest
+stated maximum CDT term
 found was Davivienda's 2 880 days, and the usual range was 720 to 1 440 days. The 3 650-day
 limit sits above every offer found, about 1,3× the longest, so it is an arithmetic bound with
 headroom over the market, not a market figure. The crossing itself, by the engine's formula:
@@ -783,8 +783,8 @@ done criterion: a legitimate retry with two slow calls exceeds it.
 Measured against these thresholds:
 
 - Verification overhead. The test times one evaluation per stored reply, in a single pass with
-  no warm-up, so the figure varies from run to run. Commit e385397 printed min 0,086, p50 0,150,
-  p95 0,596 and max 2,007 ms on 2026-10-28; four runs at 89a37ed on 2026-10-30 printed p95 from
+  no warm-up, so the figure varies from run to run. The message of e385397 records min 0,086, p50
+  0,150, p95 0,596 and max 2,007 ms on 2026-10-28; four runs at 89a37ed on 2026-10-30 printed p95 from
   0,546 to 0,606 ms (Node v22.23.2).
 - The paid run of 4B-code, `evals/runs/2026-10-29T23-18-30Z`, committed in 2cfca7a: prompt v1
   through the handler in process on the owner's host, as the stored run was. 26 runs: 24
@@ -1334,8 +1334,9 @@ were done in v1.3. The line references of the v1.2 text are to b8d61b8.
   in 6b1a122: the one SPEC edit a code session made, authorized here by name.
 - The Spanish messages of `days_out_of_range` and `principal_out_of_range`, in code as the
   `asOfDate` messages are: 68d35b3. §8.5 states them since v1.3.
-- The body-size re-measurement with thirteen-digit principals: 68d35b3, corrected in 471e498 to
-  1 759, 2 015 and 5 015 bytes. The §8 row and the §12 bullet were rewritten in v1.3.
+- The body-size re-measurement with thirteen-digit principals: 68d35b3 measured 1 759, 2 015
+  and 4 775 bytes, and 471e498 corrected the third to 5 015. The §8 row and the §12 bullet were
+  rewritten in v1.3.
 - The range stage of §8.5 in the pipeline, in the order cap, json, schema, engine, range,
   asOfDate: 68d35b3.
 - The derivation function of §11.12: e385397.
