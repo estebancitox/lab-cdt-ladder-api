@@ -1,7 +1,7 @@
-# Explica mi escalera — v1.3 specification
+# Explica mi escalera — v1.4 specification
 
-Status: draft, fixed 2026-09-13; revised to v1.1 on 2026-10-19, to v1.2 on 2026-10-24 and to v1.3
-on 2026-10-30 (§13).
+Status: draft, fixed 2026-09-13; revised to v1.1 on 2026-10-19, to v1.2 on 2026-10-24, to v1.3
+on 2026-10-30 and to v1.4 on 2026-10-31 (§13).
 Domain source of truth: `../lab-cdt-ladder`, engine pinned at `6444d05df4385343d5593b94d9e5822cad647e10`.
 
 Working policy for this endpoint: **the number stays honest — the claim moves, not the
@@ -815,8 +815,8 @@ a git dependency on the public repo would pull React, Vite and a 17 MB demo GIF 
 no entry point. Publishing the engine properly means restructuring the frontend into a monorepo
 with a build and a release pipeline, which is a large change to a repo this project only reads.
 
-**The tradeoff is real**: a copy can drift. Three mechanisms make drift detectable rather than
-hypothetical, and a fourth, specified at v1, is not built.
+**The tradeoff is real**: a copy can drift. Four mechanisms make drift detectable rather than
+hypothetical.
 
 1. **A pin.** `src/engine/VENDOR.md` records the upstream URL, the commit SHA
    (`6444d05df4385343d5593b94d9e5822cad647e10`), the vendoring date, and a SHA-256 per file.
@@ -825,13 +825,39 @@ hypothetical, and a fourth, specified at v1, is not built.
 2. **The upstream tests are vendored too** — 917 lines across 8 files — and run with this repo's
    test suite, `npm test` and `npm run test:ci`. They carry the real-world reproduction
    fixtures, so "it is the same code" is a test result rather than a claim.
-3. **A manual drift check.** `npm run verify:vendor` (`scripts/verify-vendor.sh`) compares the
-   vendored copy with the pinned commit's objects in the sibling checkout `../lab-cdt-ladder`,
-   offline, by file set, blob id and SHA-256, and fails on any difference. It runs when someone
-   runs it; it fetches nothing.
-4. **Not built: CI and an upstream watch.** The repo has no CI, so nothing runs the tests or the
-   drift check on a push, and nothing reports when upstream `main` moves past the pin. Until it
-   exists, a bump is noticed by reading upstream, and both checks run by hand (§13, Deferred).
+3. **A drift check.** `npm run verify:vendor` (`scripts/verify-vendor.sh`) compares the
+   vendored copy with the pinned commit's objects in a git repository that holds them, the
+   sibling checkout `../lab-cdt-ladder` unless `UPSTREAM` names another, offline, by file set,
+   blob id and SHA-256, and fails on any difference. It fetches nothing itself. CI runs it
+   (item 4), and anyone can run it by hand.
+4. **CI and an upstream watch**, two GitHub Actions workflows that use no secret and may only
+   read the repository (`permissions: contents: read`). The repository is public, and "The use
+   of standard GitHub-hosted runners is free" in public repositories ("GitHub Actions billing",
+   read on 2026-10-31, <https://docs.github.com/en/billing/concepts/product-billing/github-actions>).
+   - `.github/workflows/ci.yml` runs on every push to `main`, on pull requests and when started
+     by hand: `npm ci`, `npm run typecheck`, `npm run test:ci`, then item 3 against the pinned
+     commit, which the job fetches by the SHA it reads from `src/engine/VENDOR.md`.
+   - `.github/workflows/drift.yml` runs weekly, on Mondays at 13:23 UTC, and when started by
+     hand. It compares the tree id of `src/engine` at upstream `main` with the pinned commit's,
+     prints both ids and upstream's SHA, and fails when they differ. A tree id covers the
+     production code and the vendored tests and nothing outside the directory, so a commit
+     upstream that changes only the frontend leaves the run green.
+   - A failed run is the report; no issue is opened. "Notifications for scheduled workflows are
+     sent to the user who last modified the cron syntax in the workflow file" ("Events that
+     trigger workflows", read on 2026-10-31,
+     <https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule>),
+     and the notification arrives if that user has enabled email or web notifications for
+     GitHub Actions ("Notifications for workflow runs", read on 2026-10-31,
+     <https://docs.github.com/en/actions/concepts/workflows-and-actions/notifications-for-workflow-runs>).
+     Nothing records a drift as acknowledged, so every run fails until the pin is bumped.
+   - The schedule is not guaranteed. The same events page states that "In a public repository,
+     scheduled workflows are automatically disabled when no repository activity has occurred
+     in 60 days", that "The `schedule` event can be delayed during periods of high loads of
+     GitHub Actions workflow runs", and that under enough load "some queued jobs may be
+     dropped". A disabled watch does not run, so it reports nothing; `gh workflow list --all`
+     lists it with its state.
+   - Still run by hand: the evaluation suite and its replays (`eval:*`, which CI never runs),
+     the deploy and its smoke request, and the bump itself.
 
 **When a formula changes upstream**: bump the pin, re-vendor code and tests, run the vendored
 tests, then re-run the evaluation suite. Any fixture whose numbers moved is re-baselined by
@@ -1375,6 +1401,24 @@ were done in v1.3. The line references of the v1.2 text are to b8d61b8.
 | Decision | Reasoning |
 |---|---|
 | CI, with a job that reports when upstream `main` moves past the pin (§9) | Not built. Such a job would run `npm run test:ci` and a drift check that fetches the pinned commit over the network, since `scripts/verify-vendor.sh` needs the sibling checkout. Until then both checks run by hand. |
+
+### Added 2026-10-31 (v1.4)
+
+| Decision | Reasoning |
+|---|---|
+| E1. CI's Node is `node-version: 22`, the newest 22.x that `actions/setup-node` resolves | Lambda's `nodejs22.x` is a managed runtime: "By default, for functions using managed runtimes, Lambda applies runtime updates automatically" ("Understanding how Lambda manages runtime version updates", read on 2026-10-31, <https://docs.aws.amazon.com/lambda/latest/dg/runtimes-update.html>), and `template.yaml` sets no `RuntimeManagementConfig`. So CI floats within the same major. CI's npm is the one its Node bundles, 10.9.9 with 22.23.4 (the Node.js release index, a JSON file with no title, read on 2026-10-31, <https://nodejs.org/dist/index.json>), not the owner's 12.2.0; the dry run (E7) ran every step under both. Rejected: an exact 22.23.2, the owner's version, which is reproducible but drifts from Lambda as patches ship. |
+| E2. Each action is pinned to a full commit SHA, with its version in a comment: `actions/checkout` v7.0.1 at `3d3c42e5aac5ba805825da76410c181273ba90b1` and `actions/setup-node` v7.1.0 at `949feb2413d6458794dcd2491c4babbbce0c15c1`, both re-verified on 2026-10-31 against their release tags with `gh api` | Whoever can move a tag changes what runs; a commit SHA cannot move. The cost is that patches arrive only by an edit. The repository does not require SHA pinning (`sha_pinning_required: false` on 2026-10-31), so the pins are the files' own discipline, not a setting. |
+| E3. Drift is a difference between the tree ids of `src/engine` at upstream `main` and at the pin | A tree id hashes every file under the directory, the production code and the vendored tests, and nothing outside it. Upstream, `src/engine` last changed in 575be4d (2026-07-27), and the five commits after it, up to the pin, keep its tree `ee4f74fb8b02aa94e8e6d5d61323c34f7f836d51`: had 575be4d been the pin, a SHA comparison would have failed on each of the five with no engine change. An engine moved out of `src/engine` upstream reads as drift: the run prints `none` and fails. Rejected: comparing the SHAs. |
+| E4. The watch runs weekly, on Mondays at 13:23 UTC (08:23 in Bogotá), and when started by hand (`workflow_dispatch`); a failed run is the report | No issue is opened, so no write permission is needed. The minute is off the hour because GitHub names "the start of every hour" among high-load times (§9's events page). Accepted, and stated in §9: a red run stays red every week until the pin is bumped, since nothing records an acknowledgment; in a public repository, 60 days without activity disable the schedule, after which it reports nothing; and the notification depends on the receiving user's settings. |
+| E5. Two workflow files, `ci.yml` and `drift.yml` | Drift upstream is not a broken build of this repository. In one file it would turn every push red until a bump, and a real failure would hide behind a known drift. Only `drift.yml` has a schedule, so only it is subject to the 60-day rule. |
+| E6. Both workflows read the pin from `src/engine/VENDOR.md`, with the pattern `scripts/verify-vendor.sh` uses | `src/vendor.test.ts` ties that line to the pin in this document's header, so a bump stays an edit of the record and the SPEC, with no edit to a workflow; the SHA is written nowhere under `.github/`. |
+| E7. Checked before the push: a fresh-clone dry run, and `actionlint` 1.7.12 with `shellcheck` 0.11.0, run from a scratchpad and not added to the repository | Nothing runs on GitHub until the owner pushes. On 2026-10-30, and again on 2026-10-31, at 7d926b2, every `run:` block, extracted from the committed YAML, ran in a fresh clone under `bash -eo pipefail`, once with npm 12.2.0 and once with npm 10.9.9; every step exited 0, with 502 tests under each TZ, `vendor OK` for 18 files, and both tree ids `ee4f74fb8b02aa94e8e6d5d61323c34f7f836d51`. With upstream `main` moved in a local mirror, the comparison failed for db9bd82 and for a synthetic commit without `src/engine`, and passed for b0f0cbf, a different SHA with the same tree, and for the pin. The dry run ran on macOS, not on the runner. The image lists Perl 5.38.2 ("Ubuntu 24.04", image 20261026.354.1, read on 2026-10-31, <https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md>), and Ubuntu's `perl` package ships `/usr/bin/shasum` ("Ubuntu – File list of package perl/noble/amd64", read on 2026-10-31, <https://packages.ubuntu.com/noble/amd64/perl/filelist>), but the first run on GitHub is the check of the image. |
+| E9. Both jobs run on `ubuntu-24.04`, not `ubuntu-latest` | It is the image whose software list was read (E7). `ubuntu-latest` points at it today and will move to a newer image, with `ubuntu-26.04` already offered, with no edit here. The cost: when GitHub retires 24.04, both jobs fail until the label is edited. |
+| E10. The pinned commit, and for the watch upstream `main` too, are fetched with `git fetch --depth 1` into the runner's temporary directory, not with a second `actions/checkout` | `scripts/verify-vendor.sh` reads commit objects only. Outside the workspace, neither `tsc` nor `vitest` can see the upstream, and the pin reaches git through a shell variable, never through a workflow expression. Rejected: `actions/checkout` with `repository` and `ref`, which retries a failed fetch but places the clone inside the workspace. |
+| D7a. A correction of record to D7 above | "No written check is loosened" holds for this document's text, not for the code. Before 96b74c8, the code read an abbreviated month followed by a year, as in `jun 2027`, as a date, which fails when it is not in D. Since then the abbreviation alone is not a date and the year is a number A decides (§11.3), so such a reply passes when the year is in A. D7's replay stands: 0 verdicts changed in either recorded run. |
+| D9. The label the v1.3 table skips: the month-alone pattern pinned to §11.3 by a test, decided in 4C as D9, option a | The v1.3 table runs from D8 to D10. D7's row records the decision ("pinned by a test"), and 96b74c8's message names it. The test is `pins the month-alone pattern to SPEC §11.3 step 3, verbatim`, in `src/rules/rules.test.ts`. |
+| The CI row of "Deferred 2026-10-30" is done | Written in 7d926b2 as §9 item 4. Its premise held: `scripts/verify-vendor.sh` needs a repository holding the pinned commit, so the job fetches that commit over the network, and the script is unchanged. The first run on GitHub follows the owner's push; until then, E7's dry run is the evidence. |
+| E8. SPEC version 1.4; `evals/cases.json` version stays 1; schema `$id` and file stay `.v1.json`; the engine pin is unchanged | No input field, rule list or budget changed, the §2.2 block is byte-identical, and nothing under `src/`, `evals/` or `schemas/` changed. |
 
 ---
 
