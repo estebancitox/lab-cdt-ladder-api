@@ -1,0 +1,44 @@
+# The upstream watch (SPEC §9, item 4): fails when src/engine at upstream main is not the
+# pinned commit's. A failed run is the report; GitHub notifies whoever last changed the cron line.
+name: Upstream drift
+
+on:
+  schedule:
+    - cron: '23 13 * * 1' # Mondays 13:23 UTC, off the top of the hour
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compare src/engine at upstream main with the pin
+        # A tree id covers every file under src/engine, code and tests, and nothing outside it.
+        run: |
+          pin=$(sed -n 's/^Commit: \([0-9a-f]\{40\}\)$/\1/p' src/engine/VENDOR.md)
+          [ -n "$pin" ] || { echo "::error::src/engine/VENDOR.md has no 'Commit: <sha>' line"; exit 1; }
+          up="$RUNNER_TEMP/upstream"
+          git init -q "$up"
+          git -C "$up" fetch -q --depth 1 https://github.com/estebancitox/lab-cdt-ladder.git \
+            "$pin" +refs/heads/main:refs/remotes/upstream/main
+          main=$(git -C "$up" rev-parse refs/remotes/upstream/main)
+          pin_tree=$(git -C "$up" rev-parse "$pin:src/engine")
+          main_tree=$(git -C "$up" rev-parse --verify -q "$main:src/engine" || echo none)
+          echo "upstream main:                    $main"
+          echo "pin (src/engine/VENDOR.md):       $pin"
+          echo "src/engine tree at upstream main: $main_tree"
+          echo "src/engine tree at the pin:       $pin_tree"
+          if [ "$main_tree" != "$pin_tree" ]; then
+            echo "::error::src/engine at upstream main differs from the pin's; bump the pin (SPEC §9)"
+            exit 1
+          fi
+          echo "no drift: src/engine at upstream main is the pin's"

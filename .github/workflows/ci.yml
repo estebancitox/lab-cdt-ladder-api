@@ -1,0 +1,39 @@
+# Typecheck, tests and the vendor drift check (SPEC §9, items 3 and 4).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:ci
+      - name: Fetch the pinned upstream commit
+        # The pin is read from src/engine/VENDOR.md, as scripts/verify-vendor.sh reads it; the
+        # script needs the commit's objects only, so a shallow fetch outside the workspace will do.
+        run: |
+          pin=$(sed -n 's/^Commit: \([0-9a-f]\{40\}\)$/\1/p' src/engine/VENDOR.md)
+          [ -n "$pin" ] || { echo "::error::src/engine/VENDOR.md has no 'Commit: <sha>' line"; exit 1; }
+          git init -q "$RUNNER_TEMP/upstream"
+          git -C "$RUNNER_TEMP/upstream" fetch -q --depth 1 https://github.com/estebancitox/lab-cdt-ladder.git "$pin"
+      - name: Vendor drift check
+        run: UPSTREAM="$RUNNER_TEMP/upstream" npm run verify:vendor
