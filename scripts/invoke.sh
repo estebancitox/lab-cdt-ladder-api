@@ -109,14 +109,16 @@ if [ -z "${FUNCTION_URL:-}" ]; then
   exit 2
 fi
 
-# The Origin header, when one is to be sent. An array, so that no header is sent when it is empty.
+# The Origin header, when one is to be sent. An array, so that no header is sent when it is empty;
+# expanded as ${origin_header[@]+"${origin_header[@]}"} because bash before 4.4, macOS's 3.2
+# included, treats an empty array under set -u as unbound.
 origin_header=()
 if [ -n "$origin" ]; then origin_header=(--header "origin: ${origin}"); fi
 
 if [ "$unsigned" -eq 1 ]; then
   status=$(curl --silent --show-error \
     --header 'content-type: application/json' \
-    "${origin_header[@]}" \
+    ${origin_header[@]+"${origin_header[@]}"} \
     --data-binary "@${request_file}" \
     --dump-header "$headers_file" \
     --output "$response_file" --write-out '%{http_code}' \
@@ -146,7 +148,7 @@ else
     } | curl --silent --show-error --config - \
       --aws-sigv4 "aws:amz:${region}:lambda" \
       --header 'content-type: application/json' \
-      "${origin_header[@]}" \
+      ${origin_header[@]+"${origin_header[@]}"} \
       --data-binary "@${request_file}" \
       --dump-header "$headers_file" \
       --output "$response_file" --write-out '%{http_code}' \

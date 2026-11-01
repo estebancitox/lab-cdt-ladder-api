@@ -702,7 +702,7 @@ describe('rows 7 and 8: a §8.2 daily cap reached → 429 ip_limit_reached or da
     expect(keyOf(1)).toBe('day#2026-11-01')
     expect(mocks.update.mock.invocationCallOrder[1]).toBeLessThan(mocks.send.mock.invocationCallOrder[0])
     expect(mocks.dynamoOptions).toHaveBeenCalledTimes(1)
-    expect(mocks.dynamoOptions).toHaveBeenCalledWith({ maxAttempts: 2 })
+    expect(mocks.dynamoOptions).toHaveBeenCalledWith({ maxAttempts: 1 })
     const [first, second] = mocks.update.mock.calls.map((call) => call[1].abortSignal)
     expect(first).toBeInstanceOf(AbortSignal)
     expect(second).toBe(first)

@@ -61,7 +61,9 @@ export async function admit(sourceIp: string | undefined, now: Date): Promise<Ad
 /**
  * One counted request, or false when the item has reached `max`. The condition and the
  * increment are one write, so the count never passes the cap. `expiresAt` is the table's TTL
- * attribute, the same value for every write of the day.
+ * attribute, the same value for every write of the day. One attempt per write: the deadline is
+ * the retry policy, because the SDK's retry cooldown ignores the abort signal, so a second
+ * attempt after a throttled first one would sleep past the deadline and then fail at once.
  */
 async function count(
   table: string,
@@ -70,7 +72,7 @@ async function count(
   expiresAt: number,
   signal: AbortSignal,
 ): Promise<boolean> {
-  client ??= new DynamoDBClient({ maxAttempts: 2 })
+  client ??= new DynamoDBClient({ maxAttempts: 1 })
   try {
     await client.send(
       new UpdateItemCommand({

@@ -109,11 +109,13 @@ describe('admitted: two conditional writes, the client first, then everyone', ()
     expect(JSON.stringify(sent(0).input)).toMatch(/ip#2026-11-01#[0-9a-f]{64}/)
   })
 
-  it('builds the client once per container, with two attempts, and reuses it', async () => {
+  it('builds the client once per container, with one attempt per write, and reuses it', async () => {
     await limits.admit('203.0.113.9', NOW)
     await limits.admit('198.51.100.7', NOW)
     expect(mocks.clientOptions).toHaveBeenCalledTimes(1)
-    expect(mocks.clientOptions).toHaveBeenCalledWith({ maxAttempts: 2 })
+    // The deadline is the retry policy: the SDK's cooldown before a second attempt ignores the
+    // abort signal, so a retry would only sleep past the deadline and fail as AbortError.
+    expect(mocks.clientOptions).toHaveBeenCalledWith({ maxAttempts: 1 })
     expect(mocks.send).toHaveBeenCalledTimes(4)
   })
 
@@ -179,6 +181,33 @@ describe('unavailable: any other failure refuses the request by name (SPEC §7, 
   it('the deadline: the SDK rejects an aborted request as AbortError', async () => {
     mocks.send.mockRejectedValue(Object.assign(new Error('MARKER aborted'), { name: 'AbortError' }))
     await expectUnavailable('AbortError')
+  })
+
+  it('the deadline fires: a write that never answers is aborted after LIMITS_TIMEOUT_MS of real time', async () => {
+    // The fake client answers only when the signal fires, as the SDK's handler does: an error
+    // named AbortError with the signal's reason as its cause.
+    mocks.send.mockImplementation(
+      (_command: unknown, options: { abortSignal: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          options.abortSignal.addEventListener('abort', () => {
+            reject(
+              Object.assign(new Error('MARKER aborted'), {
+                name: 'AbortError',
+                cause: options.abortSignal.reason,
+              }),
+            )
+          })
+        }),
+    )
+    const started = performance.now()
+    await expectUnavailable('AbortError')
+    const elapsed = performance.now() - started
+    expect(elapsed).toBeGreaterThanOrEqual(limits.LIMITS_TIMEOUT_MS - 5)
+    expect(elapsed).toBeLessThan(limits.LIMITS_TIMEOUT_MS + 1_000)
+    const signal = sent(0).options.abortSignal as AbortSignal
+    expect(signal.aborted).toBe(true)
+    expect((signal.reason as Error).name).toBe('TimeoutError')
+    expect(mocks.send).toHaveBeenCalledTimes(1)
   })
 
   it('a second write failing after the first passed is a failure too, not a refusal', async () => {
