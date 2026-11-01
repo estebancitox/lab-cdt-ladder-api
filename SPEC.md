@@ -464,7 +464,7 @@ input is known to reach it. The API key is unreadable when the parameter name is
 the environment, when the parameter holds no value, or when reading it from SSM fails; the
 client sees the same 503 as for a model outage, and the log line tells them apart (§8.4). The
 503 row also covers the §8.2 counters: when either of the two writes that count the request
-fails for any reason other than a cap, does not answer within their shared 500 ms, or finds a cap
+fails for any reason other than a cap, does not answer within their shared 1 500 ms, or finds a cap
 misconfigured, the request is refused rather than admitted uncounted, and the log line names the
 cause (`dynamodb` and the exception name, §8.4). Both 429 rows carry a `retry-after` header, the
 whole seconds until the next 00:00 UTC, when both counters start again (§8.2). A throttled
@@ -668,7 +668,7 @@ days of their expiration time" ("Using time to live (TTL) in DynamoDB", read on 
 <https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html>). The log line
 names the cap that refused (`limitReached`, §8.4), never the address or its hash. The limiter
 fails closed: a write that fails for any reason other than its cap, or that does not answer
-within the 500 ms both writes share, `LIMITS_TIMEOUT_MS` in `src/limits.ts`, refuses the
+within the 1 500 ms both writes share, `LIMITS_TIMEOUT_MS` in `src/limits.ts`, refuses the
 request as the 503 row of §7, logged as `dynamodb` and the exception name, `AbortError` for the
 deadline. Each write is one attempt, `maxAttempts: 1`: the SDK's cooldown before a retry
 ignores the signal, so a retry after a throttled first attempt would sleep past the deadline
@@ -759,7 +759,7 @@ request or a reply contains:
 - `upstreamError`, present only on a 503, the cause by name: `ssm` and then
   `ParameterNameMissing`, `ParameterValueMissing` or the exception name of the SSM failure;
   `dynamodb` and then `DailyLimitInvalid`, `IpDailyLimitInvalid` or the exception name of the
-  §8.2 counter write that failed, `AbortError` for one that ran past the shared 500 ms; or
+  §8.2 counter write that failed, `AbortError` for one that ran past the shared 1 500 ms; or
   `deadline`; `status` and the HTTP status of an API error, or the SDK's class name for one with
   no status, such as a connection failure; the class of any other transport failure;
   `stop_reason` and the stop reason; or `empty_reply`.
@@ -853,10 +853,11 @@ remains of B.
   once per call, just before the call: for the first call after the key read, and for a retry
   after the first reply's verification, where the same sample also decides whether the retry is
   attempted. For the first call the 20 s is the smaller operand unless more than 3 950 ms had
-  elapsed by then; the §8.2 counters, bounded at 500 ms by `LIMITS_TIMEOUT_MS` in
+  elapsed by then; the §8.2 counters, bounded at 1 500 ms by `LIMITS_TIMEOUT_MS` in
   `src/limits.ts`, and the key read, bounded at 3 s by `KEY_FETCH_TIMEOUT_MS` in
-  `src/model/api-key.ts`, leave 450 ms of that for everything else; the counters' round trip
-  has not been measured. The deadline's timer starts
+  `src/model/api-key.ts`, can together take 4 500 ms, 550 ms past that line, so the first
+  call's deadline can shrink to 19 450 ms, less the time of everything else before it; the
+  counters' round trip has not been measured. The deadline's timer starts
   inside the call, so the code between the sample and the `setTimeout` of `callModel` runs
   outside the deadline: in `src/handler.ts`, the retry gate and the deadline's computation; in
   `src/model/call.ts`, the client, built on a container's first call, and the abort controller.
@@ -1380,7 +1381,7 @@ comprehension.
   AWS money, about $7 a day at concurrency 2 (§8.2), which the alarm does not see; the kill
   switch ends it.
 - **The limiter fails closed.** An outage of the counters' table, or a write past the shared
-  500 ms, refuses every request as a 503 until it recovers (§8.2): the demo is down rather than
+  1 500 ms, refuses every request as a 503 until it recovers (§8.2): the demo is down rather than
   unmetered.
 - **An IPv4 hash is reversible by enumeration.** The table holds the SHA-256 of the UTC day and
   the client key, not the address, but there are 2^32 IPv4 addresses, so whoever can read the
@@ -1563,7 +1564,7 @@ were done in v1.3. The line references of the v1.2 text are to b8d61b8.
 | F1. The caps live in the function, after validation and before the key read, in an on-demand DynamoDB table with a TTL (§8.2) | Testable code and about zero fixed cost: the table about $0.004 a month at the caps, the two metrics and the alarm about $0.80 a month outside CloudWatch's free tier, both derived from list prices. The v1.4 text's "at the edge" is replaced. Rejected: API Gateway REST with a WAF rate-based rule, which refuses before the function runs but adds a fixed monthly cost and infrastructure; its prices were not verified, since nobody argued for it. |
 | F2. 100 requests per UTC day for every client together and 10 per client address; only a request that passed validation counts, at the point just before the key read (§8) | Derived from the 2026-10-29 run: $0.94 a day at its mean per call and at most $3.07. A request that retries counts once, so the caps bound model calls at twice their value. Rejected: counting every request, which bounds invocations that cost no model money and that concurrency 2 bounds already. |
 | F3. The client key is `requestContext.http.sourceIp`: IPv4 as written, IPv6 by its /64, IPv4-mapped as its IPv4, missing as `unknown`; stored as the SHA-256 of the UTC day and the key, expiring at the next UTC midnight (§8.2, §12) | Never `X-Forwarded-For`. IPv6 clients are keyed because the URL is dual-stack (§8.2). The brief's "TTL of at most 48 h" is read as the expiry time, at most 24 h here; DynamoDB deletes the item within a few days of it, stated in §8.2. The hash's reversal by enumeration is accepted and recorded in §12; an HMAC would cost a second SSM parameter and an owner step. |
-| F4. The limiter fails closed: a 503 `upstream_unavailable`, logged `dynamodb` and the exception name, as the key read logs `ssm` and its (§7, §8.4) | Failing open would leave spend bounded only by concurrency and Anthropic's limit. Both writes share one deadline, `LIMITS_TIMEOUT_MS` = 500 ms, a named constant: the first request after a deploy is a cold start, and a 503 logged `dynamodb AbortError` there means raising it. Each write is one attempt, `maxAttempts: 1`, unlike the SSM client's two: the SDK's cooldown before a retry ignores the abort signal (review C2, below), so the deadline is the retry policy. |
+| F4. The limiter fails closed: a 503 `upstream_unavailable`, logged `dynamodb` and the exception name, as the key read logs `ssm` and its (§7, §8.4) | Failing open would leave spend bounded only by concurrency and Anthropic's limit. Both writes share one deadline, `LIMITS_TIMEOUT_MS`, a named constant, 500 ms when written and 1 500 ms since F12 below: the first request after a deploy is a cold start, and a 503 logged `dynamodb AbortError` there means raising it. Each write is one attempt, `maxAttempts: 1`, unlike the SSM client's two: the SDK's cooldown before a retry ignores the abort signal (review C2, below), so the deadline is the retry policy. |
 | F5. Two codes, `ip_limit_reached` and `daily_limit_reached`; one fixed string, `LIMIT_MESSAGE`; `retry-after` in whole seconds to the next 00:00 UTC, 1 to 86 400; the log key `limitReached` (§7, §7.1, §8.4) | Two codes so the frontend can tell "you" from "everyone". The string avoids "hoy", since the counters reset at 19:00 in Bogotá, and "en este momento", which is `UPSTREAM_MESSAGE`'s wording for an outage. `retry-after` is exposed through CORS because it is not a safelisted response header. |
 | F6. `UrlAuthType`, `AWS_IAM` or `NONE`, default `AWS_IAM`, deployed `NONE`; the two public permissions declared in the template under `Condition: UrlIsPublic`; CORS for `https://estebancitox.github.io` and `http://localhost:5173`, `POST`, `content-type`, `retry-after` exposed, `MaxAge` 600 (§8.2) | Measured with aws-sam-translator 1.116.0 on 2026-10-31 and again on 2026-11-01: with `AuthType: !Ref UrlAuthType` SAM generates no permission, so the URL would answer 403 ("even if the function URL uses the NONE auth type", "Control access to Lambda function URLs", read on 2026-11-01, <https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html>); with a literal `NONE` it generates two. So the template declares them itself, with the properties SAM writes and its own names. The default is the private value, so a deploy that forgets the override cannot open the URL. `MaxAge` is set because AWS's two pages give different defaults, 5 and 0; 600 s is about one preflight per visit, a change reaches browsers within ten minutes, and it is under Chromium's 7 200 s cap. Rejected: a literal `NONE`, simpler, with going private a one-line edit plus a deploy; and adding `localhost` only in stage 2. |
 | F7. Two metric filters on `inputTokens` and `outputTokens`; one alarm on `(inputTokens × 2 + outputTokens × 10) / 10^6` over a sliding 24 h, at `DailySpendAlarmUsd` = $0.50; an SNS topic with no subscription; the owner subscribes outside the repository and sets Anthropic's spend limit, $20 a month suggested, before the public deployment (§8.2) | A filter carries one transformation. The prices are pinned to `PRICE_USD_PER_MTOK` of `src/eval/suite.ts` by `src/template.test.ts`. The window is a sliding day evaluated every minute, not a UTC day, so it can hold two days' caps; missing data does not breach. $0.50 is about 53 requests at the mean, below the cap by design. The alarm inherits the §8.4 lower bound. The Anthropic limit is the only control outside this repository, so it exists first. Rejected: an AWS Budget; the AWS side is cents at the caps and about $7 a day under a flood (§8.2; review C3, below), which a Budget would report after the fact and only the kill switch ends. |
@@ -1577,6 +1578,7 @@ were done in v1.3. The line references of the v1.2 text are to b8d61b8.
 | N4. The two update expressions ran against dynalite 4.0.0 from a scratchpad on 2026-11-01, with the real client and the module bundled by esbuild | No Java and no Docker for DynamoDB Local on the machine. With the caps at 2 and 3 the five calls gave admitted, admitted, refused `ip`, admitted, refused `daily`, and every item held `requests` and `expiresAt` equal to the next UTC midnight. The first run against DynamoDB itself is the owner's smoke test; a defect there shows as a 503, not as unmetered spend. |
 | Checked before the push: a fresh-clone `npm ci`, the template translated offline, `shellcheck` 0.11.0 on `scripts/invoke.sh` | On 2026-11-01, at 8942e81: `npm ci` in a fresh clone installed 93 packages with 0 vulnerabilities under npm 12.2.0 and under npm 10.9.9, CI's, with `tsc` clean and 573 tests under each TZ. The template, with an S3 `CodeUri` in a scratchpad copy, translated with aws-sam-translator 1.116.0 for both `UrlAuthType` values: the two permissions carry the condition, SAM adds none, and the `Cors` block comes out as written. `shellcheck` reported the same two info-level SC2016 notes as at 61db6d7, on the inline `node -e` blocks, and nothing else. The hosted transform may differ from 1.116.0; the owner's change set is the check. |
 | Review of 2026-11-01: one agent with a refutation step, four findings confirmed and ten refuted; fixed in the commit after 836fc57 | C1 (medium): `scripts/invoke.sh`'s signed path aborted under macOS's `/bin/bash` 3.2.57 with `origin_header[@]: unbound variable`, since bash before 4.4 treats an empty array under `set -u` as unbound; `shellcheck` does not flag it. Reproduced on 2026-11-01 before and after the fix, with curl and the credential export stubbed: every path now runs. The expansion is `${origin_header[@]+"${origin_header[@]}"}`. C2 (low): `maxAttempts: 1` (F4). C3 (low): the flood cost (§8.2, §12, F7). C4 (nit): a test now fires the real deadline, `AbortSignal.timeout` and 500 ms of real time, and sees `AbortError` with a `TimeoutError` reason. |
+| F12. `LIMITS_TIMEOUT_MS` raised from 500 ms to 1 500 ms; `KEY_FETCH_TIMEOUT_MS` stays 3 000 ms (§7, §8.2, §8.4, §8.6, §12, F4) | Measured at the first public deploy, on 2026-11-01: after the kill-switch test, reserved concurrency set to 0 and back to 2, recycled the container, the first request answered 503 with the log line `{"status":503,"latencyMs":590,"upstreamError":"dynamodb AbortError"}` and REPORT `Init Duration: 405.37 ms`; the warm retry answered 200. Two cold starts that day, one of them a 503: the case F4 named. That 503 calls no model, so it is a defect of the experience, not of spend, and on a demo with sparse traffic a visitor's first request often meets a cold container. The counters and the key read can now take 4 500 ms together, 550 ms past the 3 950 ms line of §8.6, so the first model call's deadline can shrink to 19 450 ms; accepted, and §8.6 says so. Rejected: lowering `KEY_FETCH_TIMEOUT_MS` to 2 000 ms to keep the sum under that line, a larger change than the defect asks for. The deploy's first call is the cold-start test. |
 
 ---
 

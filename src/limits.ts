@@ -15,7 +15,7 @@ import { errorCodeName } from './error-name'
  * Off when LIMITS_TABLE is unset or empty, which is how the tests and the §10 harness run; the
  * template always sets it.
  */
-export const LIMITS_TIMEOUT_MS = 500
+export const LIMITS_TIMEOUT_MS = 1_500
 
 export type LimitName = 'ip' | 'daily'
 

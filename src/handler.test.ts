@@ -327,13 +327,15 @@ describe('200: the explanation (SPEC §7.1)', () => {
     expect(Number(timeout[1])).toBe(25)
     expect(MODEL_DEADLINE_MS).toBe(20_000)
     expect(KEY_FETCH_TIMEOUT_MS).toBe(3_000)
-    expect(LIMITS_TIMEOUT_MS).toBe(500)
+    expect(LIMITS_TIMEOUT_MS).toBe(1_500)
     expect(LIMITS_TIMEOUT_MS + KEY_FETCH_TIMEOUT_MS + MODEL_DEADLINE_MS).toBeLessThan(
       Number(timeout[1]) * 1000,
     )
-    // SPEC §8.6: the counters and the key read leave 450 ms of the 3 950 ms before the first
-    // call's 20 s is no longer the smaller operand.
-    expect(3_950 - LIMITS_TIMEOUT_MS - KEY_FETCH_TIMEOUT_MS).toBe(450)
+    // SPEC §8.6: the counters and the key read can together run 550 ms past the 3 950 ms line
+    // where the first call's 20 s stops being the smaller operand, so its deadline can shrink to
+    // 19 450 ms.
+    expect(LIMITS_TIMEOUT_MS + KEY_FETCH_TIMEOUT_MS - 3_950).toBe(550)
+    expect(callDeadlineMs(LIMITS_TIMEOUT_MS + KEY_FETCH_TIMEOUT_MS)).toBe(19_450)
     // SPEC §8.6: B is strictly below the Lambda timeout.
     expect(HANDLER_BUDGET_MS).toBeLessThan(Number(timeout[1]) * 1000)
   })
@@ -796,7 +798,7 @@ describe('rows 7 and 8: a §8.2 daily cap reached → 429 ip_limit_reached or da
     expect(written.join('')).not.toContain('MARKER')
   })
 
-  it('the shared 500 ms deadline: the SDK rejects an aborted write as AbortError', async () => {
+  it('the shared 1 500 ms deadline: the SDK rejects an aborted write as AbortError', async () => {
     mocks.update.mockRejectedValue(Object.assign(new Error('MARKER aborted'), { name: 'AbortError' }))
     const response = await handler(fromClient(CASE_1))
     expect(response.statusCode).toBe(503)

@@ -302,7 +302,7 @@ describe('the UTC day and retry-after (SPEC §7)', () => {
     expect(limits.retryAfterSeconds(new Date(instant))).toBe(seconds)
   })
 
-  it('LIMITS_TIMEOUT_MS is the 500 ms both writes share', () => {
-    expect(limits.LIMITS_TIMEOUT_MS).toBe(500)
+  it('LIMITS_TIMEOUT_MS is the 1 500 ms both writes share', () => {
+    expect(limits.LIMITS_TIMEOUT_MS).toBe(1_500)
   })
 })
