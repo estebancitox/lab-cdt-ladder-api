@@ -2,7 +2,7 @@
   "name": "lab-cdt-ladder-api",
   "private": true,
   "version": "0.1.0",
-  "description": "Explica mi escalera: one endpoint that explains a CDT ladder in plain Spanish. Session 2B: the validation pipeline and explanation view behind a private, buffered Lambda Function URL that calls the model.",
+  "description": "Explica mi escalera: one endpoint that explains a CDT ladder in plain Spanish. The validation pipeline and explanation view behind a buffered Lambda Function URL that calls the model; public within the SPEC 8.2 daily caps since Session 6.",
   "type": "module",
   "engines": {
     "node": ">=22"

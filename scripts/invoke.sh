@@ -1,20 +1,29 @@
 #!/usr/bin/env bash
-# Sends one request to the deployed Function URL and prints the status and the body.
+# Sends one request to the deployed Function URL and prints the status, the CORS and retry-after
+# headers, and the body.
 #
-# The URL is private (AuthType AWS_IAM), so the request is signed with SigV4 for the "lambda"
-# service using the credentials of an AWS profile. The credentials are handed to curl on stdin,
-# never on its command line, and are never printed.
+# A request is signed with SigV4 for the "lambda" service using the credentials of an AWS profile,
+# unless --unsigned or --preflight. The credentials are handed to curl on stdin, never on its
+# command line, and are never printed. A public URL (UrlAuthType NONE in template.yaml) accepts
+# unsigned requests, within the SPEC 8.2 daily caps; a signed-only URL (AWS_IAM) answers them 403.
 #
 # Usage:
-#   FUNCTION_URL=https://<id>.lambda-url.<region>.on.aws/ scripts/invoke.sh <case> [--unsigned]
+#   FUNCTION_URL=https://<id>.lambda-url.<region>.on.aws/ scripts/invoke.sh <case> [--unsigned] [--origin=<origin>]
 #   FUNCTION_URL=https://<id>.lambda-url.<region>.on.aws/ scripts/invoke.sh --oversize
+#   FUNCTION_URL=https://<id>.lambda-url.<region>.on.aws/ scripts/invoke.sh --preflight [--origin=<origin>]
 #   scripts/invoke.sh <case> --dry-run
 #
-#   <case>      a case of evals/cases.json, by 1-based position or by id
-#   --oversize  case 1 padded with spaces to one byte over the 8 KiB cap. It is still valid JSON,
-#               so only the cap can refuse it.
-#   --unsigned  send without a signature. The Function URL itself answers 403.
-#   --dry-run   build the body, print its size, and stop before contacting anything.
+#   <case>       a case of evals/cases.json, by 1-based position or by id
+#   --oversize   case 1 padded with spaces to one byte over the 8 KiB cap. It is still valid JSON,
+#                so only the cap can refuse it.
+#   --unsigned   send without a signature, as a browser would.
+#   --origin=    the Origin header to send; the default for an unsigned request or a preflight is
+#                https://estebancitox.github.io. The reply carries the CORS headers the URL is
+#                configured with for an allowed origin, and none for any other.
+#   --preflight  send a CORS preflight, an unsigned OPTIONS with Origin, Access-Control-Request-
+#                Method POST and Access-Control-Request-Headers content-type, and stop: no case,
+#                no body. Its headers show what a browser would be allowed.
+#   --dry-run    build the body, print its size, and stop before contacting anything.
 #
 # Environment: FUNCTION_URL, and AWS_PROFILE (default: lab).
 set -euo pipefail
@@ -24,25 +33,58 @@ cd "$(dirname "$0")/.."
 selector=""
 oversize=0
 unsigned=0
+preflight=0
 dry_run=0
+origin=""
 for arg in "$@"; do
   case "$arg" in
     --oversize) oversize=1 ;;
     --unsigned) unsigned=1 ;;
+    --preflight) preflight=1 ;;
     --dry-run) dry_run=1 ;;
+    --origin=*) origin="${arg#--origin=}" ;;
     -*) echo "unknown option: $arg" >&2; exit 2 ;;
     *) selector="$arg" ;;
   esac
 done
 if [ "$oversize" -eq 1 ] && [ -z "$selector" ]; then selector=1; fi
-if [ -z "$selector" ]; then
-  sed -n '2,19p' "$self" | sed 's/^# \{0,1\}//' >&2
+if [ -z "$selector" ] && [ "$preflight" -eq 0 ]; then
+  sed -n '2,28p' "$self" | sed 's/^# \{0,1\}//' >&2
   exit 2
+fi
+if [ -z "$origin" ] && { [ "$unsigned" -eq 1 ] || [ "$preflight" -eq 1 ]; }; then
+  origin=https://estebancitox.github.io
 fi
 
 request_file=$(mktemp)
 response_file=$(mktemp)
-trap 'rm -f "$request_file" "$response_file"' EXIT
+headers_file=$(mktemp)
+trap 'rm -f "$request_file" "$response_file" "$headers_file"' EXIT
+
+# The headers a browser's CORS layer and the SPEC 7 client read, as the URL answered them.
+print_headers() {
+  grep -i -E '^(retry-after|access-control-[a-z-]+):' "$headers_file" | tr -d '\r' || true
+}
+
+if [ "$preflight" -eq 1 ]; then
+  if [ -z "${FUNCTION_URL:-}" ]; then
+    echo "set FUNCTION_URL to the FunctionUrl output of the stack" >&2
+    exit 2
+  fi
+  echo "request: CORS preflight from ${origin}" >&2
+  status=$(curl --silent --show-error --request OPTIONS \
+    --header "origin: ${origin}" \
+    --header 'access-control-request-method: POST' \
+    --header 'access-control-request-headers: content-type' \
+    --dump-header "$headers_file" \
+    --output "$response_file" --write-out '%{http_code}' \
+    "$FUNCTION_URL")
+  echo "HTTP ${status}"
+  print_headers
+  cat "$response_file"
+  echo
+  exit 0
+fi
 
 node --input-type=commonjs -e '
   const fs = require("node:fs")
@@ -67,10 +109,16 @@ if [ -z "${FUNCTION_URL:-}" ]; then
   exit 2
 fi
 
+# The Origin header, when one is to be sent. An array, so that no header is sent when it is empty.
+origin_header=()
+if [ -n "$origin" ]; then origin_header=(--header "origin: ${origin}"); fi
+
 if [ "$unsigned" -eq 1 ]; then
   status=$(curl --silent --show-error \
     --header 'content-type: application/json' \
+    "${origin_header[@]}" \
     --data-binary "@${request_file}" \
+    --dump-header "$headers_file" \
     --output "$response_file" --write-out '%{http_code}' \
     "$FUNCTION_URL")
 else
@@ -98,7 +146,9 @@ else
     } | curl --silent --show-error --config - \
       --aws-sigv4 "aws:amz:${region}:lambda" \
       --header 'content-type: application/json' \
+      "${origin_header[@]}" \
       --data-binary "@${request_file}" \
+      --dump-header "$headers_file" \
       --output "$response_file" --write-out '%{http_code}' \
       "$FUNCTION_URL"
   )
@@ -106,6 +156,7 @@ else
 fi
 
 echo "HTTP ${status}"
+print_headers
 cat "$response_file"
 echo
 
@@ -122,14 +173,16 @@ node --input-type=commonjs -e '
     process.exit(0)
   }
   const spec = fs.readFileSync("SPEC.md", "utf8")
-  const fixed = /^ERROR_MESSAGE\s+(.+)$/m.exec(spec)[1]
-  const same = Buffer.from(text, "utf8").equals(Buffer.from(fixed, "utf8"))
+  const fixed = ["ERROR_MESSAGE", "UPSTREAM_MESSAGE", "LIMIT_MESSAGE"].find((name) => {
+    const line = new RegExp(`^${name}\\s+(.+)$`, "m").exec(spec)
+    return line && Buffer.from(text, "utf8").equals(Buffer.from(line[1], "utf8"))
+  })
   // Lines as SPEC 11.1 sees them: NFC, odd spaces to plain ones, horizontal runs collapsed, trimmed.
   const lines = text
     .normalize("NFC")
     .split("\n")
-    .map((line) => line.replace(/[    ⁠]/g, " ").replace(/[^\S\n]+/g, " ").trim())
+    .map((line) => line.replace(/[    ⁠]/g, " ").replace(/[^\S\n]+/g, " ").trim())
   const headers = ["Qué pasa y cuándo", "Riesgos"].every((header) => lines.includes(header))
-  console.log(`text equals ERROR_MESSAGE of SPEC 7, byte for byte: ${same ? "yes" : "no"}`)
+  console.log(`text equals a SPEC 7 fixed string, byte for byte: ${fixed ?? "no"}`)
   console.log(`both SPEC 4 headers on their own lines (after SPEC 11.1 normalization): ${headers ? "yes" : "no"}`)
 ' "$response_file"

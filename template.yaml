@@ -1,8 +1,8 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >-
-  Explica mi escalera v1, session 2B: one Lambda behind a buffered Function URL. The URL is
-  private (AuthType AWS_IAM) until the SPEC 8.2 controls exist.
+  Explica mi escalera v1: one Lambda behind a buffered Function URL. Public (AuthType NONE) within
+  the SPEC 8.2 daily caps, or signed-only (AuthType AWS_IAM), as UrlAuthType says.
 
 Parameters:
   AnthropicApiKeyParameterName:
@@ -13,6 +13,40 @@ Parameters:
       Name of the SSM SecureString that holds the Anthropic API key, with its leading slash. The
       function may read this one parameter and nothing else. A parameter encrypted with a
       customer-managed KMS key would also need kms:Decrypt on that key.
+  UrlAuthType:
+    Type: String
+    Default: AWS_IAM
+    AllowedValues:
+      - AWS_IAM
+      - NONE
+    Description: >-
+      NONE makes the Function URL public: anyone may call it, within the SPEC 8.2 caps below.
+      AWS_IAM takes only requests signed with AWS credentials. The default is the private one, so
+      a deploy that forgets the override cannot open the URL; the public deployment passes NONE.
+  DailyRequestLimit:
+    Type: Number
+    Default: 100
+    MinValue: 1
+    Description: >-
+      SPEC 8.2: requests per UTC day for every client together, counted after validation and
+      before the model call. DAILY_LIMIT in the function's environment.
+  IpDailyRequestLimit:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    Description: >-
+      SPEC 8.2: requests per UTC day per client address, an IPv6 client by its /64.
+      IP_DAILY_LIMIT in the function's environment.
+  DailySpendAlarmUsd:
+    Type: Number
+    Default: 0.5
+    MinValue: 0
+    Description: >-
+      SPEC 8.2: the alarm fires when the model spend the log lines report, at list prices,
+      reaches this many dollars over a sliding 24 hours. A lower bound of the spend (SPEC 8.4).
+
+Conditions:
+  UrlIsPublic: !Equals [!Ref UrlAuthType, NONE]
 
 Resources:
   # Explicit so the logs expire: a log group Lambda creates on its own never does.
@@ -21,6 +55,23 @@ Resources:
     Properties:
       LogGroupName: !Sub /aws/lambda/${AWS::StackName}-explain
       RetentionInDays: 14
+
+  # SPEC 8.2: the two daily counters, one item each, incremented by a conditional UpdateItem in
+  # src/limits.ts. On demand, so an idle table costs nothing; TTL on expiresAt, the next UTC
+  # midnight, so a day's items expire by themselves (DynamoDB deletes them within a few days).
+  LimitsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
 
   ExplainFunction:
     Type: AWS::Serverless::Function
@@ -48,28 +99,147 @@ Resources:
       # SPEC 8: strictly greater than the 24 s handler budget B, strictly less than 29 s.
       Timeout: 25
       # At most two requests spend money at the same time. If the account quota refuses this,
-      # the setting stays and the quota is what gets fixed.
+      # the setting stays and the quota is what gets fixed. Set to 0 by hand, it is the kill
+      # switch: the URL then answers 429 from the platform (SPEC 8.2).
       ReservedConcurrentExecutions: 2
       LoggingConfig:
         LogGroup: !Ref ExplainLogGroup
       Environment:
         Variables:
           API_KEY_PARAMETER: !Ref AnthropicApiKeyParameterName
+          LIMITS_TABLE: !Ref LimitsTable
+          DAILY_LIMIT: !Ref DailyRequestLimit
+          IP_DAILY_LIMIT: !Ref IpDailyRequestLimit
       Policies:
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow
               Action: ssm:GetParameter
               Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${AnthropicApiKeyParameterName}
+            # The one action the limiter uses, on the one table.
+            - Effect: Allow
+              Action: dynamodb:UpdateItem
+              Resource: !GetAtt LimitsTable.Arn
       FunctionUrlConfig:
-        AuthType: AWS_IAM
+        AuthType: !Ref UrlAuthType
         InvokeMode: BUFFERED
+        # SPEC 8.2: the frontend's origins, the one method and header it sends, and the one
+        # response header it must read. MaxAge is set because the two AWS pages disagree on the
+        # default: 600 s is about one preflight per visit, and a change here reaches browsers
+        # within ten minutes. CORS is not access control: a script ignores it.
+        Cors:
+          AllowOrigins:
+            - https://estebancitox.github.io
+            - http://localhost:5173
+          AllowMethods:
+            - POST
+          AllowHeaders:
+            - content-type
+          ExposeHeaders:
+            - retry-after
+          MaxAge: 600
+
+  # A public URL needs two permissions. SAM generates them only for a literal AuthType NONE: given
+  # a parameter it generates none, and the URL answers 403 (aws-sam-translator 1.116.0, measured
+  # 2026-10-31). So they are declared here, with the properties SAM would give them, and exist
+  # only while UrlAuthType is NONE.
+  PublicUrlInvokePermission:
+    Type: AWS::Lambda::Permission
+    Condition: UrlIsPublic
+    Properties:
+      Action: lambda:InvokeFunctionUrl
+      FunctionName: !Ref ExplainFunction
+      Principal: '*'
+      FunctionUrlAuthType: NONE
+
+  PublicFunctionInvokePermission:
+    Type: AWS::Lambda::Permission
+    Condition: UrlIsPublic
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ExplainFunction
+      Principal: '*'
+      InvokedViaFunctionUrl: true
+
+  # SPEC 8.2: the spend alarm. Two filters read the token fields of the SPEC 8.4 log line, one
+  # metric each, since a filter carries one transformation; a line without the field matches
+  # neither. The alarm prices them as src/eval/suite.ts does and sums over a sliding day. Missing
+  # data is no spend. The topic has no subscription here: the owner subscribes outside the
+  # template, so no address lives in the repository.
+  InputTokensMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref ExplainLogGroup
+      FilterPattern: '{ $.inputTokens >= 0 }'
+      MetricTransformations:
+        - MetricNamespace: !Ref AWS::StackName
+          MetricName: InputTokens
+          MetricValue: $.inputTokens
+          Unit: Count
+
+  OutputTokensMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref ExplainLogGroup
+      FilterPattern: '{ $.outputTokens >= 0 }'
+      MetricTransformations:
+        - MetricNamespace: !Ref AWS::StackName
+          MetricName: OutputTokens
+          MetricValue: $.outputTokens
+          Unit: Count
+
+  SpendAlarmTopic:
+    Type: AWS::SNS::Topic
+
+  DailySpendAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${AWS::StackName}-daily-spend
+      AlarmDescription: >-
+        SPEC 8.2: the model spend the log lines report, at list prices, over the last 24 hours
+        reached the DailySpendAlarmUsd parameter.
+      Metrics:
+        - Id: inputTokens
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: !Ref AWS::StackName
+              MetricName: InputTokens
+            Period: 86400
+            Stat: Sum
+        - Id: outputTokens
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: !Ref AWS::StackName
+              MetricName: OutputTokens
+            Period: 86400
+            Stat: Sum
+        - Id: spendUsd
+          Label: Model spend over 24 hours, USD at list prices
+          Expression: (inputTokens * 2 + outputTokens * 10) / 1000000
+          ReturnData: true
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref DailySpendAlarmUsd
+      EvaluationPeriods: 1
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref SpendAlarmTopic
 
 Outputs:
   FunctionUrl:
-    Description: The private Function URL. Requests must be signed with SigV4 for the lambda service.
+    Description: >-
+      The Function URL. Public when UrlAuthType is NONE; otherwise requests must be signed with
+      SigV4 for the lambda service.
     Value: !GetAtt ExplainFunctionUrl.FunctionUrl
   FunctionName:
     Value: !Ref ExplainFunction
   LogGroupName:
     Value: !Ref ExplainLogGroup
+  LimitsTableName:
+    Value: !Ref LimitsTable
+  SpendAlarmTopicArn:
+    Description: Subscribe an email to this topic to receive the daily spend alarm.
+    Value: !Ref SpendAlarmTopic
+  SpendAlarmName:
+    Value: !Ref DailySpendAlarm
