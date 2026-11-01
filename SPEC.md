@@ -434,7 +434,9 @@ explanation would quietly satisfy every evaluation rule.
 | Engine validation failure | 400 | `ERROR_MESSAGE` | `invalid_input` |
 | A rung's `days`, `principal` or maturity over a §8.5 limit | 400 | `ERROR_MESSAGE` | `invalid_input` |
 | `asOfDate` invalid or after the last maturity | 400 | `ERROR_MESSAGE` | `invalid_input` |
-| Model unavailable, overloaded or timed out, or its API key unreadable | 503 | `UPSTREAM_MESSAGE` | `upstream_unavailable` |
+| The §8.2 daily cap for this client's address reached | 429 | `LIMIT_MESSAGE` | `ip_limit_reached` |
+| The §8.2 daily cap for every client together reached | 429 | `LIMIT_MESSAGE` | `daily_limit_reached` |
+| Model unavailable, overloaded or timed out, its API key unreadable, or the §8.2 counters unavailable | 503 | `UPSTREAM_MESSAGE` | `upstream_unavailable` |
 | Model response truncated at `max_tokens` | 503 | `UPSTREAM_MESSAGE` | `upstream_truncated` |
 | Model reply failed verification (§7.4), with no time for a retry or on the retry too | 502 | `UPSTREAM_MESSAGE` | `verification_failed` |
 | Unexpected internal error | 500 | `UPSTREAM_MESSAGE` | `internal_error` |
@@ -444,18 +446,28 @@ Fixed strings, byte-exact:
 ```
 ERROR_MESSAGE     No puedo explicar esta escalera: los datos recibidos no son válidos.
 UPSTREAM_MESSAGE  No puedo explicar esta escalera en este momento: el servicio no está disponible.
+LIMIT_MESSAGE     No puedo explicar esta escalera por ahora: se alcanzó el límite diario de solicitudes.
 ```
 
-On every 400 path the model is **never called**. Validation runs first and short-circuits. On
-the 502 path the model was called once or twice, and no reply it gave is returned.
+On every 400 path, on both 429 paths and on the 503 of the counters, the model is **never
+called**. Validation runs first and short-circuits; the §8.2 counters are updated next, and only
+a request they admit reads the key and calls the model. On the 502 path the model was called
+once or twice, and no reply it gave is returned.
 
-Two rows cover more than their condition names. The engine validation row also covers a
+Three rows cover more than their condition names. The engine validation row also covers a
 `RangeError`, the engine's refusal of what it cannot represent in pesos or as a date, thrown
 while the request is validated or while its view, ground truth and derived rules are built: a
 400 with an empty `issues` array. It is a guard: since the maturity limit of §8.5, no validated
 input is known to reach it. The API key is unreadable when the parameter name is missing from
 the environment, when the parameter holds no value, or when reading it from SSM fails; the
-client sees the same 503 as for a model outage, and the log line tells them apart (§8.4).
+client sees the same 503 as for a model outage, and the log line tells them apart (§8.4). The
+503 row also covers the §8.2 counters: when either of the two writes that count the request
+fails for any reason other than a cap, does not answer within their shared 500 ms, or finds a cap
+misconfigured, the request is refused rather than admitted uncounted, and the log line names the
+cause (`dynamodb` and the exception name, §8.4). Both 429 rows carry a `retry-after` header, the
+whole seconds until the next 00:00 UTC, when both counters start again (§8.2). A throttled
+Function URL answers 429 too, from the platform, with a body this service does not write (§8.2):
+a client tells the two apart by `error.code`, not by the status.
 
 ### 7.1 Response shapes
 
@@ -496,7 +508,19 @@ Verification failure (§7.4):
 }
 ```
 
-`text` is always one of the two fixed strings. The `issues` array is diagnostic metadata for
+Limit reached (§8.2):
+
+```json
+{
+  "text": "No puedo explicar esta escalera por ahora: se alcanzó el límite diario de solicitudes.",
+  "error": { "code": "ip_limit_reached", "issues": [] }
+}
+```
+
+with a `retry-after` header, the whole seconds until the next 00:00 UTC; `daily_limit_reached`
+has the same shape.
+
+`text` is always one of the three fixed strings. The `issues` array is diagnostic metadata for
 the client, not the explanation, so it does not contradict §5.5.
 
 ### 7.2 Engine validation issues are returned verbatim

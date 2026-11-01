@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { callDeadlineMs, retryFits } from './budget'
 import { errorClassName } from './error-name'
 import { buildExplanationView, type ExplanationView } from './explain'
+import { admit, LimitsUnavailableError, type Admission, type LimitName } from './limits'
 import { ApiKeyUnavailableError, getApiKey } from './model/api-key'
 import { callModel, type ModelOutcome, type TokenUsage } from './model/call'
 import { buildModelPayload, renderUserMessage } from './model/payload'
@@ -10,6 +11,7 @@ import { MAX_BODY_BYTES, validateRequest } from './request/validate'
 import {
   explanation,
   json,
+  limitReached,
   refusal,
   serviceFailure,
   verificationFailure,
@@ -17,11 +19,15 @@ import {
 } from './response'
 import { deriveRules, evaluate, failedRuleNames, groundTruthFrom, type GroundTruth } from './rules'
 
-/** The fields of a Lambda Function URL event (payload format 2.0) this handler reads. */
+/**
+ * The fields of a Lambda Function URL event (payload format 2.0) this handler reads. The
+ * platform sets `sourceIp` from the TCP connection; it is never a header the client can write.
+ */
 export interface FunctionUrlEvent {
   headers?: Record<string, string | undefined>
   body?: string | null
   isBase64Encoded?: boolean
+  requestContext?: { http?: { sourceIp?: string } }
 }
 
 /** The one field of the Lambda context this handler reads. */
@@ -36,9 +42,10 @@ export interface LambdaContext {
  * exist when the model answered, summed over both calls when a verification retry was made.
  * `failedRules` exists only when a reply failed verification (§7.4), whatever the status: one
  * entry per reply evaluated, in order, each the distinct failed rule names in §11.12 order, an
- * empty entry for a reply that passed; never a rule's argument. The cause fields name a class,
- * a status or a stop reason, never a message: `upstreamError` exists only on a 503,
- * `internalError` only on a 500.
+ * empty entry for a reply that passed; never a rule's argument. `limitReached` exists only on a
+ * 429, the §8.2 cap that refused the request, never the address or its hash. The cause fields
+ * name a class, a status or a stop reason, never a message: `upstreamError` exists only on a
+ * 503, `internalError` only on a 500.
  */
 interface LogLine {
   requestId: string | null
@@ -48,6 +55,7 @@ interface LogLine {
   entityCount: number | null
   status: number
   latencyMs: number
+  limitReached?: LimitName
   inputTokens?: number
   outputTokens?: number
   failedRules?: string[][]
@@ -122,6 +130,22 @@ async function respond(
   }
   const userMessage = renderUserMessage(buildModelPayload(request, view))
 
+  // SPEC §8.2: only a validated request is counted, and only a counted request spends. A
+  // counter that cannot be updated refuses the request (§7, the 503 row), as an unreadable key
+  // does: the limiter fails closed.
+  let admission: Admission
+  try {
+    admission = await admit(sourceIp(event), new Date())
+  } catch (error) {
+    if (!(error instanceof LimitsUnavailableError)) throw error
+    line.upstreamError = `dynamodb ${error.causeName}`
+    return serviceFailure('upstream_unavailable')
+  }
+  if (admission.kind === 'refused') {
+    line.limitReached = admission.limit
+    return limitReached(admission.limit, admission.retryAfterSeconds)
+  }
+
   let apiKey: string
   try {
     apiKey = await getApiKey()
@@ -177,6 +201,15 @@ function upstreamFailure(
 function rawBody(event: FunctionUrlEvent | null | undefined): Buffer {
   const body = typeof event?.body === 'string' ? event.body : ''
   return Buffer.from(body, event?.isBase64Encoded === true ? 'base64' : 'utf8')
+}
+
+/**
+ * The client's address as the platform saw the connection, or undefined on a direct invocation.
+ * Never a header: `X-Forwarded-For` is whatever the client wrote.
+ */
+function sourceIp(event: FunctionUrlEvent | null | undefined): string | undefined {
+  const ip = event?.requestContext?.http?.sourceIp
+  return typeof ip === 'string' ? ip : undefined
 }
 
 /** The Content-Length the client declared, when it is a plain non-negative integer. */

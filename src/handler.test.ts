@@ -12,13 +12,14 @@ import {
 import { addDays, validateScenario, type ScenarioInput } from './engine'
 import { buildExplanationView } from './explain'
 import type { FunctionUrlEvent } from './handler'
+import { LIMITS_TIMEOUT_MS } from './limits'
 import { KEY_FETCH_TIMEOUT_MS } from './model/api-key'
 import { CLIENT_OPTIONS, MAX_RETRIES, MAX_TOKENS, MODEL, MODEL_DEADLINE_MS } from './model/call'
 import { buildModelPayload } from './model/payload'
 import { SYSTEM_PROMPT_V1 } from './model/prompt.v1'
 import { ERROR_MESSAGE } from './request/errors'
 import { MAX_BODY_BYTES, MAX_RUNG_DAYS, validateRequest } from './request/validate'
-import { UPSTREAM_MESSAGE } from './response'
+import { LIMIT_MESSAGE, UPSTREAM_MESSAGE } from './response'
 import {
   SPEC_MD,
   STORED_RUNS,
@@ -35,15 +36,17 @@ import {
 } from './test-support/contract'
 
 /**
- * The handler against every row of the SPEC §7 table, with the Anthropic SDK and the SSM client
- * mocked: no test here reaches the network. The SDK's error classes stay the real ones, so the
- * handler's instanceof checks are exercised as they run in production.
+ * The handler against every row of the SPEC §7 table, with the Anthropic SDK, the SSM client and
+ * the DynamoDB client mocked: no test here reaches the network. The SDK's error classes stay the
+ * real ones, so the handler's instanceof checks are exercised as they run in production.
  */
 const mocks = vi.hoisted(() => ({
   create: vi.fn(),
   anthropicOptions: vi.fn(),
   send: vi.fn(),
   ssmOptions: vi.fn(),
+  update: vi.fn(),
+  dynamoOptions: vi.fn(),
 }))
 
 vi.mock('@anthropic-ai/sdk', async (importOriginal) => {
@@ -65,6 +68,18 @@ vi.mock('@aws-sdk/client-ssm', () => ({
     }
   },
   GetParameterCommand: class {
+    constructor(readonly input: unknown) {}
+  },
+}))
+
+vi.mock('@aws-sdk/client-dynamodb', () => ({
+  DynamoDBClient: class {
+    send = mocks.update
+    constructor(options: unknown) {
+      mocks.dynamoOptions(options)
+    }
+  },
+  UpdateItemCommand: class {
     constructor(readonly input: unknown) {}
   },
 }))
@@ -94,7 +109,12 @@ beforeEach(async () => {
   mocks.send.mockReset()
   mocks.ssmOptions.mockReset()
   mocks.send.mockResolvedValue({ Parameter: { Value: 'test-key' } })
+  mocks.update.mockReset()
+  mocks.dynamoOptions.mockReset()
+  mocks.update.mockResolvedValue({})
   vi.stubEnv('API_KEY_PARAMETER', PARAMETER)
+  // No LIMITS_TABLE: the limiter is off, as in the §10 harness, except where a test sets it.
+  vi.stubEnv('LIMITS_TABLE', undefined)
   written = []
   vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: unknown) => {
     written.push(String(chunk))
@@ -171,7 +191,10 @@ function expectNoModelCall() {
 }
 
 /** Byte for byte against the string parsed out of SPEC.md, not against a retyped copy. */
-function expectBytes(text: unknown, specName: 'ERROR_MESSAGE' | 'UPSTREAM_MESSAGE') {
+function expectBytes(
+  text: unknown,
+  specName: 'ERROR_MESSAGE' | 'UPSTREAM_MESSAGE' | 'LIMIT_MESSAGE',
+) {
   const line = new RegExp(`^${specName}\\s+(.+)$`, 'm').exec(SPEC_MD)
   if (!line) throw new Error(`${specName} line not found in SPEC.md`)
   expect(typeof text).toBe('string')
@@ -219,7 +242,19 @@ describe('the SPEC §7 table is the list of rows this file covers', () => {
       ],
       ['asOfDate invalid or after the last maturity', 400, 'ERROR_MESSAGE', 'invalid_input'],
       [
-        'Model unavailable, overloaded or timed out, or its API key unreadable',
+        "The §8.2 daily cap for this client's address reached",
+        429,
+        'LIMIT_MESSAGE',
+        'ip_limit_reached',
+      ],
+      [
+        'The §8.2 daily cap for every client together reached',
+        429,
+        'LIMIT_MESSAGE',
+        'daily_limit_reached',
+      ],
+      [
+        'Model unavailable, overloaded or timed out, its API key unreadable, or the §8.2 counters unavailable',
         503,
         'UPSTREAM_MESSAGE',
         'upstream_unavailable',
@@ -240,6 +275,10 @@ describe('the SPEC §7 table is the list of rows this file covers', () => {
 
   it('UPSTREAM_MESSAGE equals the SPEC §7 fixed string byte for byte', () => {
     expectBytes(UPSTREAM_MESSAGE, 'UPSTREAM_MESSAGE')
+  })
+
+  it('LIMIT_MESSAGE equals the SPEC §7 fixed string byte for byte', () => {
+    expectBytes(LIMIT_MESSAGE, 'LIMIT_MESSAGE')
   })
 })
 
@@ -281,14 +320,20 @@ describe('200: the explanation (SPEC §7.1)', () => {
     expect((await handler(post(CASE_1, String(MAX_BODY_BYTES + 1)))).headers).toEqual(HEADERS)
   })
 
-  it('the time budget: the key read and the model call fit inside the Lambda timeout', () => {
+  it('the time budget: the counters, the key read and the model call fit inside the Lambda timeout', () => {
     const template = readFileSync(new URL('../template.yaml', import.meta.url), 'utf8')
     const timeout = /^\s+Timeout: (\d+)$/m.exec(template)
     if (!timeout) throw new Error('Timeout not found in template.yaml')
     expect(Number(timeout[1])).toBe(25)
     expect(MODEL_DEADLINE_MS).toBe(20_000)
     expect(KEY_FETCH_TIMEOUT_MS).toBe(3_000)
-    expect(KEY_FETCH_TIMEOUT_MS + MODEL_DEADLINE_MS).toBeLessThan(Number(timeout[1]) * 1000)
+    expect(LIMITS_TIMEOUT_MS).toBe(500)
+    expect(LIMITS_TIMEOUT_MS + KEY_FETCH_TIMEOUT_MS + MODEL_DEADLINE_MS).toBeLessThan(
+      Number(timeout[1]) * 1000,
+    )
+    // SPEC §8.6: the counters and the key read leave 450 ms of the 3 950 ms before the first
+    // call's 20 s is no longer the smaller operand.
+    expect(3_950 - LIMITS_TIMEOUT_MS - KEY_FETCH_TIMEOUT_MS).toBe(450)
     // SPEC §8.6: B is strictly below the Lambda timeout.
     expect(HANDLER_BUDGET_MS).toBeLessThan(Number(timeout[1]) * 1000)
   })
@@ -595,7 +640,190 @@ describe('rows 2 to 6: every 400 is ERROR_MESSAGE, invalid_input, and no model c
   )
 })
 
-describe('row 7: model unavailable, overloaded or timed out → 503 upstream_unavailable', () => {
+describe('rows 7 and 8: a §8.2 daily cap reached → 429 ip_limit_reached or daily_limit_reached', () => {
+  const TABLE = 'lab-cdt-ladder-api-LimitsTable-1A2B3C'
+  const NOW = '2026-11-01T23:59:30.000Z'
+  const CLIENT = '203.0.113.9'
+  const FORGED = '198.51.100.7'
+  const hashOf = (key: string) => sha256(`2026-11-01 ${key}`)
+
+  /**
+   * The platform's event for a request from `ip`, carrying a forged X-Forwarded-For too; null is
+   * an event with no request context, as a direct invocation delivers.
+   */
+  function fromClient(body: string, ip: string | null = CLIENT): FunctionUrlEvent {
+    const event = post(body)
+    event.headers = { ...event.headers, 'x-forwarded-for': FORGED }
+    return ip === null ? event : { ...event, requestContext: { http: { sourceIp: ip } } }
+  }
+
+  /** What the SDK throws when the condition fails; its message must never reach the log. */
+  function conditionFailed() {
+    return Object.assign(new Error('MARKER The conditional request failed'), {
+      name: 'ConditionalCheckFailedException',
+    })
+  }
+
+  /** The partition key of the n-th write (0-based). */
+  function keyOf(n: number): string {
+    return mocks.update.mock.calls[n][0].input.Key.pk.S
+  }
+
+  beforeEach(() => {
+    vi.stubEnv('LIMITS_TABLE', TABLE)
+    vi.stubEnv('DAILY_LIMIT', '100')
+    vi.stubEnv('IP_DAILY_LIMIT', '10')
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(NOW))
+  })
+
+  async function expectRefused(event: FunctionUrlEvent, limit: 'ip' | 'daily', retryAfter: string) {
+    const response = await handler(event)
+    expect(response.statusCode).toBe(429)
+    expect(response.headers).toEqual({ ...HEADERS, 'retry-after': retryAfter })
+    const body = JSON.parse(response.body)
+    expectBytes(body.text, 'LIMIT_MESSAGE')
+    expect(body).toEqual({ text: LIMIT_MESSAGE, error: { code: `${limit}_limit_reached`, issues: [] } })
+    expectNoModelCall()
+    const line = logLine()
+    expect(line).toMatchObject({ status: 429, limitReached: limit, rungCount: 3, entityCount: 3 })
+    expectKeys(line, 'limitReached')
+    expect(written.join('')).not.toContain('MARKER')
+    return line
+  }
+
+  it('under both caps: counted twice, the client first, before the key read; then explained', async () => {
+    mocks.create.mockResolvedValue(reply(PASSING))
+    const response = await handler(fromClient(CASE_1))
+    expect(response.statusCode).toBe(200)
+    expect(response.headers).toEqual(HEADERS)
+    expect(mocks.update).toHaveBeenCalledTimes(2)
+    expect(keyOf(0)).toBe(`ip#2026-11-01#${hashOf(CLIENT)}`)
+    expect(keyOf(1)).toBe('day#2026-11-01')
+    expect(mocks.update.mock.invocationCallOrder[1]).toBeLessThan(mocks.send.mock.invocationCallOrder[0])
+    expect(mocks.dynamoOptions).toHaveBeenCalledTimes(1)
+    expect(mocks.dynamoOptions).toHaveBeenCalledWith({ maxAttempts: 2 })
+    const [first, second] = mocks.update.mock.calls.map((call) => call[1].abortSignal)
+    expect(first).toBeInstanceOf(AbortSignal)
+    expect(second).toBe(first)
+    expect(Object.keys(logLine())).toEqual([...BASE_KEYS, ...TOKEN_KEYS])
+  })
+
+  it('row 7, at the client cap: 429 ip_limit_reached, the shared count untouched, no key read', async () => {
+    mocks.update.mockRejectedValue(conditionFailed())
+    await expectRefused(fromClient(CASE_1), 'ip', '30')
+    expect(mocks.update).toHaveBeenCalledTimes(1)
+    // The body is the SPEC §7.1 block.
+    const response = await handler(fromClient(CASE_1))
+    expect(JSON.parse(response.body)).toEqual(JSON.parse(specJsonBlockAfter('Limit reached (§8.2):')))
+  })
+
+  it('row 8, at the shared cap: 429 daily_limit_reached, after this client was counted', async () => {
+    mocks.update.mockResolvedValueOnce({}).mockRejectedValueOnce(conditionFailed())
+    await expectRefused(fromClient(CASE_1), 'daily', '30')
+    expect(mocks.update).toHaveBeenCalledTimes(2)
+    expect(keyOf(1)).toBe('day#2026-11-01')
+  })
+
+  it('retry-after is the whole seconds until the next 00:00 UTC, from 1 to 86 400', async () => {
+    mocks.update.mockRejectedValue(conditionFailed())
+    vi.setSystemTime(new Date('2026-11-02T00:00:00.000Z'))
+    await expectRefused(fromClient(CASE_1), 'ip', '86400')
+    expect(keyOf(0)).toBe(`ip#2026-11-02#${sha256(`2026-11-02 ${CLIENT}`)}`)
+    written = []
+    vi.setSystemTime(new Date('2026-11-01T23:59:59.500Z'))
+    await expectRefused(fromClient(CASE_1), 'ip', '1')
+    written = []
+    vi.setSystemTime(new Date('2026-11-01T23:59:59.999Z'))
+    await expectRefused(fromClient(CASE_1), 'ip', '1')
+  })
+
+  it("the address is the connection's, never X-Forwarded-For; hashed with the day, never logged", async () => {
+    mocks.update.mockRejectedValue(conditionFailed())
+    await expectRefused(fromClient(CASE_1), 'ip', '30')
+    expect(keyOf(0)).toBe(`ip#2026-11-01#${hashOf(CLIENT)}`)
+    expect(keyOf(0)).not.toContain(hashOf(FORGED))
+    const text = written.join('')
+    for (const secret of [CLIENT, FORGED, hashOf(CLIENT), 'ip#', TABLE]) {
+      expect(text).not.toContain(secret)
+    }
+  })
+
+  it('an IPv6 client is keyed by its /64, an IPv4-mapped one by its IPv4, and no address as unknown', async () => {
+    mocks.update.mockRejectedValue(conditionFailed())
+    await expectRefused(fromClient(CASE_1, '2001:db8:1:2:3:4:5:6'), 'ip', '30')
+    expect(keyOf(0)).toBe(`ip#2026-11-01#${hashOf('2001:db8:1:2::/64')}`)
+    written = []
+    await expectRefused(fromClient(CASE_1, `::ffff:${CLIENT}`), 'ip', '30')
+    expect(keyOf(1)).toBe(`ip#2026-11-01#${hashOf(CLIENT)}`)
+    written = []
+    await expectRefused(fromClient(CASE_1, null), 'ip', '30')
+    expect(keyOf(2)).toBe(`ip#2026-11-01#${hashOf('unknown')}`)
+  })
+
+  it('a 413 and the 400 rows are never counted: validation refuses before the counters', async () => {
+    const oversize = fromClient(CASE_1)
+    oversize.headers = { ...oversize.headers, 'content-length': String(MAX_BODY_BYTES + 1) }
+    expect((await handler(oversize)).statusCode).toBe(413)
+    expect((await handler(fromClient('{not json'))).statusCode).toBe(400)
+    const input = inputOf('healthy-3-rung')
+    input.asOfDate = '2027-13-01'
+    expect((await handler(fromClient(JSON.stringify(input)))).statusCode).toBe(400)
+    expect(mocks.update).not.toHaveBeenCalled()
+    expect(mocks.dynamoOptions).not.toHaveBeenCalled()
+    expectNoModelCall()
+    expect(written).toHaveLength(3)
+  })
+
+  it('the counters unavailable: 503 upstream_unavailable, the cause by name, no key read', async () => {
+    const throttled = Object.assign(new Error('MARKER throughput'), {
+      name: 'ProvisionedThroughputExceededException',
+    })
+    mocks.update.mockRejectedValue(throttled)
+    const response = await handler(fromClient(CASE_1))
+    expect(response.statusCode).toBe(503)
+    expect(response.headers).toEqual(HEADERS)
+    const body = JSON.parse(response.body)
+    expectBytes(body.text, 'UPSTREAM_MESSAGE')
+    expect(body).toEqual({ text: UPSTREAM_MESSAGE, error: { code: 'upstream_unavailable', issues: [] } })
+    expectNoModelCall()
+    const line = logLine()
+    expect(line).toMatchObject({
+      status: 503,
+      upstreamError: 'dynamodb ProvisionedThroughputExceededException',
+    })
+    expectKeys(line, 'upstreamError')
+    expect(written.join('')).not.toContain('MARKER')
+  })
+
+  it('the shared 500 ms deadline: the SDK rejects an aborted write as AbortError', async () => {
+    mocks.update.mockRejectedValue(Object.assign(new Error('MARKER aborted'), { name: 'AbortError' }))
+    const response = await handler(fromClient(CASE_1))
+    expect(response.statusCode).toBe(503)
+    expect(logLine()).toMatchObject({ status: 503, upstreamError: 'dynamodb AbortError' })
+    expectNoModelCall()
+  })
+
+  it('a cap that is not a positive integer refuses as a 503 before any write', async () => {
+    vi.stubEnv('IP_DAILY_LIMIT', '0')
+    const response = await handler(fromClient(CASE_1))
+    expect(response.statusCode).toBe(503)
+    expect(logLine()).toMatchObject({ status: 503, upstreamError: 'dynamodb IpDailyLimitInvalid' })
+    expect(mocks.update).not.toHaveBeenCalled()
+    expectNoModelCall()
+  })
+
+  it('off without LIMITS_TABLE: no client, no write, and the request is explained', async () => {
+    vi.stubEnv('LIMITS_TABLE', undefined)
+    mocks.create.mockResolvedValue(reply(PASSING))
+    expect((await handler(fromClient(CASE_1))).statusCode).toBe(200)
+    expect(mocks.dynamoOptions).not.toHaveBeenCalled()
+    expect(mocks.update).not.toHaveBeenCalled()
+    expect(Object.keys(logLine())).toEqual([...BASE_KEYS, ...TOKEN_KEYS])
+  })
+})
+
+describe('row 9: model unavailable, overloaded or timed out → 503 upstream_unavailable', () => {
   async function expectUnavailable(event: FunctionUrlEvent, upstreamError: string) {
     const response = await handler(event)
     expect(response.statusCode).toBe(503)
@@ -780,7 +1008,7 @@ describe('row 7: model unavailable, overloaded or timed out → 503 upstream_una
   })
 })
 
-describe('row 8: model response truncated at max_tokens → 503 upstream_truncated', () => {
+describe('row 10: model response truncated at max_tokens → 503 upstream_truncated', () => {
   it('returns the fixed string, never the partial text, and logs the tokens that were spent', async () => {
     const partial = 'Qué pasa y cuándo\n\nTu escalera tiene 3 peldaños que vencen el'
     mocks.create.mockResolvedValue(
@@ -806,7 +1034,7 @@ describe('row 8: model response truncated at max_tokens → 503 upstream_truncat
   })
 })
 
-describe('row 9: model reply failed verification → 502 verification_failed (SPEC §7.4)', () => {
+describe('row 11: model reply failed verification → 502 verification_failed (SPEC §7.4)', () => {
   /** What case 1's derived set fails REPLY on, distinct names in §11.12 order (measured). */
   const REPLY_FAILS = ['mentions_every_rung', 'mentions_entity', 'language_es']
   const failureBody = (rules: string[]) => ({
@@ -1045,7 +1273,7 @@ describe('row 9: model reply failed verification → 502 verification_failed (SP
   })
 })
 
-describe('row 10: unexpected internal error → 500 internal_error', () => {
+describe('row 12: unexpected internal error → 500 internal_error', () => {
   it('a defect is neither a refusal nor an outage, and its message is not logged', async () => {
     // A 200 the SDK parsed but whose usage is missing: reading it throws in this service.
     mocks.create.mockResolvedValue({ ...reply(REPLY), usage: undefined })

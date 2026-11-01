@@ -8,8 +8,18 @@ import { ERROR_MESSAGE, type ErrorCode, type Issue } from './request/errors'
 export const UPSTREAM_MESSAGE =
   'No puedo explicar esta escalera en este momento: el servicio no está disponible.'
 
+/**
+ * Fixed string of SPEC §7 for a 429: a §8.2 daily cap refused the request before the key read and
+ * the model call. Byte-exact against the SPEC, checked the same way.
+ */
+export const LIMIT_MESSAGE =
+  'No puedo explicar esta escalera por ahora: se alcanzó el límite diario de solicitudes.'
+
 /** SPEC §7: the codes that exist only once validation has passed. */
 export type ServiceCode = 'upstream_unavailable' | 'upstream_truncated' | 'internal_error'
+
+/** SPEC §7: the two 429 codes, one per §8.2 cap. */
+export type LimitCode = 'ip_limit_reached' | 'daily_limit_reached'
 
 /** SPEC §7.4: a verification issue names a rule, the part before its first colon, and no more. */
 export interface VerificationIssue {
@@ -45,6 +55,19 @@ export function explanation(text: string): HttpResponse {
 export function refusal(statusCode: 413 | 400, code: ErrorCode): HttpResponse {
   const issues: Issue[] = []
   return json(statusCode, { text: ERROR_MESSAGE, error: { code, issues } })
+}
+
+/**
+ * SPEC §7: 429 when a §8.2 cap refused the request, with `retry-after` in whole seconds until the
+ * next 00:00 UTC, when both counters start again. The platform's own 429, for a throttled
+ * Function URL, carries no such body, so a client reads `error.code`, not the status alone.
+ */
+export function limitReached(limit: 'ip' | 'daily', retryAfterSeconds: number): HttpResponse {
+  const issues: Issue[] = []
+  const code: LimitCode = limit === 'ip' ? 'ip_limit_reached' : 'daily_limit_reached'
+  const response = json(429, { text: LIMIT_MESSAGE, error: { code, issues } })
+  response.headers['retry-after'] = String(retryAfterSeconds)
+  return response
 }
 
 /** SPEC §7: 503 when the model call gave no usable reply, 500 for a defect in the service. */

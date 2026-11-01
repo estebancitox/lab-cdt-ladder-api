@@ -3,8 +3,9 @@ import { errorCodeName } from '../error-name'
 
 /**
  * SPEC §8.6: the first model call keeps its full 20 s unless more than 3 950 ms have elapsed when
- * it starts. Reading the key, which happens once per container, gets a bounded 3 s of them and
- * leaves 950 ms for everything else.
+ * it starts. Reading the key, which happens once per container, gets a bounded 3 s of them; the
+ * §8.2 counters get 500 ms (`LIMITS_TIMEOUT_MS` in `src/limits.ts`), which leaves 450 ms for
+ * everything else.
  */
 export const KEY_FETCH_TIMEOUT_MS = 3_000
 
