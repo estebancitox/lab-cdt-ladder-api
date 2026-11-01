@@ -1,7 +1,7 @@
-# Explica mi escalera — v1.4 specification
+# Explica mi escalera — v1.5 specification
 
 Status: draft, fixed 2026-09-13; revised to v1.1 on 2026-10-19, to v1.2 on 2026-10-24, to v1.3
-on 2026-10-30 and to v1.4 on 2026-10-31 (§13).
+on 2026-10-30, to v1.4 on 2026-10-31 and to v1.5 on 2026-11-01 (§13).
 Domain source of truth: `../lab-cdt-ladder`, engine pinned at `6444d05df4385343d5593b94d9e5822cad647e10`.
 
 Working policy for this endpoint: **the number stays honest — the claim moves, not the
@@ -406,9 +406,11 @@ Not prose, not a partial explanation, and not a 200. See §7.
 - No market data, no live rates, no current fiscal figures. Withholding and the insurance
   ceiling are inputs, never facts the service asserts.
 - No multi-turn conversation. One request, one explanation.
-- No end-user authentication and no per-user state in v1. The deployment is private all the
-  same, until §8.2's controls exist: its Function URL takes only requests signed with AWS
-  credentials (`AuthType: AWS_IAM` in `template.yaml`), which name an AWS principal, not a user.
+- No end-user authentication and no per-user state in v1. The deployment is public since v1.5,
+  within §8.2's controls: two daily request caps counted before the model call, one per client
+  address and one for every client together, and a spend alarm. The Function URL's `AuthType` is
+  the `UrlAuthType` parameter of `template.yaml`, `NONE` as deployed; `AWS_IAM` makes it take
+  only requests signed with AWS credentials, which name an AWS principal, not a user.
 - No rollover. The frontend can project renewals; this endpoint explains one ladder at its
   initial terms. A body carrying `rollover` is rejected by `additionalProperties: false`.
 
@@ -607,6 +609,8 @@ production is not loosened: the response is a retry, a 502 and a logged name.
 | API Gateway integration | 29 s hard cap | applies only if fronted by API Gateway REST |
 | `max_tokens` | 600 | a 200-word Spanish reply is roughly 320 tokens; truncation is a failure, not a response |
 | Concurrent executions | 2 | `ReservedConcurrentExecutions` in `template.yaml`: at most two requests spend money at the same time (§8.2) |
+| Requests per UTC day, every client together | 100 | `DailyRequestLimit` in `template.yaml`, `DAILY_LIMIT` in the function's environment (§8.2); counted after validation and before the key read, so the cap bounds model calls at twice its value, with the §7.4 retry, and invocations not at all |
+| Requests per UTC day, per client address | 10 | `IpDailyRequestLimit`, `IP_DAILY_LIMIT` (§8.2); an IPv6 client by its /64; counted first, so a client refused on this cap never touches the row above |
 
 The byte cap is enforced on `Content-Length` and on the raw body **before** parsing. It is not
 delegated to the platform's own multi-megabyte limit.
@@ -630,18 +634,84 @@ explanation that names an institution the user did not write is worse than a ref
 The cap lives in the frontend *serializer*, not in the engine, so the API adopting it is a
 **policy choice**, not an inherited rule. It is stated as one.
 
-### 8.2 Abuse and spend — specified, not built
+### 8.2 Abuse and spend
 
-v1 ships no end-user authentication (§6). A public endpoint would spend money per request for
-anyone who calls it, so two controls are specified now and built before any public deployment:
+v1 ships no end-user authentication (§6). A public endpoint spends money per request for anyone
+who calls it, so since v1.5 two controls stand between a request and the model, and a third
+watches the spend. All three are stopgaps for the absence of identity, replaced by per-user
+limits in the v2 line named in §6.1.
 
-- A per-IP rate limit at the edge.
-- A daily spend alarm on the model account, with a hard monthly budget cap.
+**Two daily request caps, in the function.** After validation, the view and the derived rules,
+and before the API key is read, the handler counts the request against two items of a DynamoDB
+table, `LimitsTable` in `template.yaml`, on demand and with a TTL: one for every client
+together, `DailyRequestLimit`, 100 per UTC day, and one per client address,
+`IpDailyRequestLimit`, 10 per UTC day (§8); both reach the code as environment variables, so a
+change is a deploy. Each count is one conditional `UpdateItem` that fails once the item has
+reached its cap, so the count and the check are one write and two concurrent requests never
+both pass as the last one. The per-client write goes first: a client refused on its own cap
+never touches the shared count, and a client refused on the shared cap was counted for its
+address, which shows only after ten such attempts, when its code becomes `ip_limit_reached`
+with the same `retry-after`. A refused request is a 429 (§7) with `retry-after` in whole
+seconds until the next 00:00 UTC, 19:00 in Bogotá, when both counters start again. Only a
+request that passed validation counts, so a 400 or a 413 never does, and only a counted request
+spends, so the caps bound model calls at twice their value with the §7.4 retry; they do not
+bound invocations, which cost no model money and which `ReservedConcurrentExecutions: 2` bounds
+(§8). The client address is `requestContext.http.sourceIp`, the TCP connection the platform
+saw, never `X-Forwarded-For`, which the client writes. An IPv4 address counts as written; an
+IPv6 address by its /64, since the URL accepts both ("Function URLs are dual stack-enabled,
+supporting IPv4 and IPv6", "Creating and managing Lambda function URLs", read on 2026-11-01,
+<https://docs.aws.amazon.com/lambda/latest/dg/urls-configuration.html>); an IPv4-mapped IPv6
+address as its IPv4; and a request with no address, which only a direct invocation delivers, as
+`unknown`. The table stores the SHA-256 of the UTC day and that key, never the address, under a
+TTL of the next UTC midnight; DynamoDB then "automatically deletes expired items within a few
+days of their expiration time" ("Using time to live (TTL) in DynamoDB", read on 2026-11-01,
+<https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html>). The log line
+names the cap that refused (`limitReached`, §8.4), never the address or its hash. The limiter
+fails closed: a write that fails for any reason other than its cap, or that does not answer
+within the 500 ms both writes share, `LIMITS_TIMEOUT_MS` in `src/limits.ts`, refuses the
+request as the 503 row of §7, logged as `dynamodb` and the exception name, `AbortError` for the
+deadline; a cold container's first write is the one most likely to meet it, and raising the
+constant is the remedy. With `LIMITS_TABLE` unset the limiter is off, which is how the tests
+and the §10 harness run; the template always sets it. Derived from the 2026-10-29 run and from
+list prices, not measured: 100 requests a day cost $0.94 at that run's mean per call ($0.224490
+over 24 calls, $0.009354) and at most $3.07 if every request retried at the largest stored
+input with the full 600-token reply ($0.015374 a call); the table costs about $0.004 a month at
+the caps, two writes per counted request at $0.625 per million; the two custom metrics and the
+alarm below about $0.80 a month outside CloudWatch's free tier, and nothing inside it.
 
-Both are stopgaps for the absence of identity. They are replaced by per-user limits in the
-v2 line named in §6.1. Until they exist the deployment is not public: the Function URL takes
-only requests signed with AWS credentials (`AuthType: AWS_IAM`, §6), and
-`ReservedConcurrentExecutions: 2` keeps at most two requests spending at the same time (§8).
+**A spend alarm, in the stack.** Two metric filters on the log group read `inputTokens` and
+`outputTokens` from the §8.4 line, one metric each; a CloudWatch alarm sums both over a sliding
+24 hours, evaluated every minute, prices them at the §10 list prices, $2 and $10 per million
+tokens, and fires at `DailySpendAlarmUsd`, $0.50, through an SNS topic, `SpendAlarmTopic`, to
+which the owner subscribes outside the repository, so that no address lives in it. At the mean
+per call above, $0.50 is about 53 requests, below the 100-request cap by design: the alarm rings
+before the cap is reached. It inherits the fields' lower bound (§8.4), since a call that returned
+no usage is spend it cannot see, and its sliding day can hold up to two UTC days' caps. The hard
+monthly cap is Anthropic's own spend limit, which the owner sets on the organization's billing
+page before the public deployment and which this repository does not represent: "When usage
+reaches a spend limit you set, requests return HTTP 400 with error type
+`invalid_request_error`", and at the tier's own cap "API requests return HTTP 429" ("Rate
+limits", read on 2026-11-01, <https://platform.claude.com/docs/en/api/rate-limits>); the same
+page says "You can’t set spend limits on the default Workspace", so the limit is the
+organization's, or a dedicated workspace's if the key moves there.
+
+**What the URL itself does.** `UrlAuthType` in `template.yaml` is `NONE` as deployed, so anyone
+may call the URL; `AWS_IAM` makes it signed-only again with one deploy, and the two permissions
+a public URL needs exist only while it is `NONE` (§13, F6). Its CORS configuration names the
+frontend's origins, `https://estebancitox.github.io` and `http://localhost:5173`, the method
+`POST` and the header `content-type`, exposes `retry-after`, which a browser may not read
+otherwise, and lets a browser cache a preflight for 600 s. CORS is not access control: it tells
+a browser which pages may read the reply, and a script, `curl` or a server ignores it; nor does
+it stop a `text/plain` POST, which a browser sends without a preflight and which the handler
+answers like any other, since it never reads `Content-Type`. The caps above are what bounds a
+caller, whatever it is. A throttled URL, concurrency past `ReservedConcurrentExecutions` or that
+value set to 0 by hand, the kill switch, answers 429 from the platform: "Whenever your function
+concurrency exceeds the reserved concurrency, your function URL returns an HTTP `429` status
+code", and with reserved concurrency zero "This throttles all requests to your function URL,
+resulting in HTTP `429` status responses" (the function URLs page above). That body is not this
+service's; a client reads `error.code` and treats a 429 without one as the platform's. Whether
+the platform's 429 carries the CORS headers, and whether a preflight invokes the function, the
+pages do not say; both are observed at the first public deployment.
 
 ### 8.3 Untrusted text
 
@@ -660,6 +730,8 @@ request or a reply contains:
 - `bodyHash`, the SHA-256 in hex of the body as the client sent it, and `bodyBytes`, its size.
 - `rungCount` and `entityCount`, `null` until the pipeline has accepted the body.
 - `status`, and `latencyMs`, the handler's own time rounded to the millisecond.
+- `limitReached`, present only on a 429, the §8.2 cap that refused the request: `ip` or
+  `daily`. Never the address, nor its hash.
 - `inputTokens` and `outputTokens`, present when a model call returned usage to the handler,
   summed over the calls that did. A call that ended at its deadline or in an API or transport
   error returns none, and neither does one whose reply this service then failed to read, so the
@@ -670,7 +742,9 @@ request or a reply contains:
   empty entry for a reply that passed; never the reply text and never a rule's argument, which
   can be an entity name.
 - `upstreamError`, present only on a 503, the cause by name: `ssm` and then
-  `ParameterNameMissing`, `ParameterValueMissing` or the exception name of the SSM failure; or
+  `ParameterNameMissing`, `ParameterValueMissing` or the exception name of the SSM failure;
+  `dynamodb` and then `DailyLimitInvalid`, `IpDailyLimitInvalid` or the exception name of the
+  §8.2 counter write that failed, `AbortError` for one that ran past the shared 500 ms; or
   `deadline`; `status` and the HTTP status of an API error, or the SDK's class name for one with
   no status, such as a connection failure; the class of any other transport failure;
   `stop_reason` and the stop reason; or `empty_reply`.
@@ -764,8 +838,10 @@ remains of B.
   once per call, just before the call: for the first call after the key read, and for a retry
   after the first reply's verification, where the same sample also decides whether the retry is
   attempted. For the first call the 20 s is the smaller operand unless more than 3 950 ms had
-  elapsed by then; the key read, bounded at 3 s by `KEY_FETCH_TIMEOUT_MS` in
-  `src/model/api-key.ts`, leaves 950 ms of that for everything else. The deadline's timer starts
+  elapsed by then; the §8.2 counters, bounded at 500 ms by `LIMITS_TIMEOUT_MS` in
+  `src/limits.ts`, and the key read, bounded at 3 s by `KEY_FETCH_TIMEOUT_MS` in
+  `src/model/api-key.ts`, leave 450 ms of that for everything else; the counters' round trip
+  has not been measured. The deadline's timer starts
   inside the call, so the code between the sample and the `setTimeout` of `callModel` runs
   outside the deadline: in `src/handler.ts`, the retry gate and the deadline's computation; in
   `src/model/call.ts`, the client, built on a container's first call, and the abort controller.
@@ -1244,9 +1320,10 @@ comprehension.
   minus before the currency symbol; §11.3 step 4 fails that form on its sign, and the view
   exposes no negative figure in the first place, not even a signed zero, since a JSON `-0` is
   read as `0` (§7.3). `excess` and `headroom` carry the direction instead.
-- **`asOfDate` is required and the real clock is never consulted**, so evaluation results are
-  reproducible and fixtures do not rot. A ladder whose maturities all precede `asOfDate` is
-  rejected rather than explained.
+- **`asOfDate` is required and the real clock is never consulted by the explanation**, so
+  evaluation results are reproducible and fixtures do not rot. The §8.2 counters read the clock
+  for the UTC day, and nothing of the explanation depends on it. A ladder whose maturities all
+  precede `asOfDate` is rejected rather than explained.
 
 - **A reply that fails verification is never returned with a warning.** The reader is deciding
   what to do with their savings; a possibly invented figure handed over with a label they may
@@ -1280,6 +1357,22 @@ comprehension.
   abbreviated and whole, so `3 mayores de 1440` is read as a date not in D and fails as
   invented. v1.3 narrowed the month-alone form to whole names (§13); this one was kept, since
   its false positive needs a one- or two-digit number before the word.
+- **The daily caps are per address, and an address is not a person.** Clients behind one
+  carrier-grade NAT share the ten requests of its address, and a client holding several /64
+  prefixes has ten per prefix. The shared cap is a deliberate denial of service to everyone once
+  reached, since an unbounded public endpoint is the worse outcome. Both counters reset at
+  00:00 UTC, 19:00 in Bogotá, not at local midnight.
+- **The limiter fails closed.** An outage of the counters' table, or a write past the shared
+  500 ms, refuses every request as a 503 until it recovers (§8.2): the demo is down rather than
+  unmetered.
+- **An IPv4 hash is reversible by enumeration.** The table holds the SHA-256 of the UTC day and
+  the client key, not the address, but there are 2^32 IPv4 addresses, so whoever can read the
+  table can recover an address by hashing them all with the day. Accepted: the item expires at
+  the next UTC midnight and is deleted within a few days of that, the table is readable only
+  with the account's credentials, and the function itself may only `UpdateItem`. An HMAC under a
+  key from a second SSM parameter would close it, at the cost of an owner step.
+- **CORS protects pages, not the endpoint.** A script, `curl` or a server ignores it, and a
+  `text/plain` POST needs no preflight (§8.2). The caps are what bounds a caller.
 
 ---
 
@@ -1446,6 +1539,27 @@ were done in v1.3. The line references of the v1.2 text are to b8d61b8.
 | The CI row of "Deferred 2026-10-30" is done | Built in 7d926b2; §9 item 4 describes it. Its premise held: `scripts/verify-vendor.sh` needs a repository holding the pinned commit, so the job fetches that commit over the network, and the script is unchanged. The first run on GitHub follows the owner's push; until then, E7's dry run is the evidence. |
 | E8. SPEC version 1.4; `evals/cases.json` version stays 1; schema `$id` and file stay `.v1.json`; the engine pin is unchanged | No input field, rule list or budget changed, the §2.2 block is byte-identical, and nothing under `src/`, `evals/` or `schemas/` changed. |
 
+### Added 2026-11-01 (v1.5)
+
+| Decision | Reasoning |
+|---|---|
+| F1. The caps live in the function, after validation and before the key read, in an on-demand DynamoDB table with a TTL (§8.2) | Testable code and about zero fixed cost: the table about $0.004 a month at the caps, the two metrics and the alarm about $0.80 a month outside CloudWatch's free tier, both derived from list prices. The v1.4 text's "at the edge" is replaced. Rejected: API Gateway REST with a WAF rate-based rule, which refuses before the function runs but adds a fixed monthly cost and infrastructure; its prices were not verified, since nobody argued for it. |
+| F2. 100 requests per UTC day for every client together and 10 per client address; only a request that passed validation counts, at the point just before the key read (§8) | Derived from the 2026-10-29 run: $0.94 a day at its mean per call and at most $3.07. A request that retries counts once, so the caps bound model calls at twice their value. Rejected: counting every request, which bounds invocations that cost no model money and that concurrency 2 bounds already. |
+| F3. The client key is `requestContext.http.sourceIp`: IPv4 as written, IPv6 by its /64, IPv4-mapped as its IPv4, missing as `unknown`; stored as the SHA-256 of the UTC day and the key, expiring at the next UTC midnight (§8.2, §12) | Never `X-Forwarded-For`. IPv6 clients are keyed because the URL is dual-stack (§8.2). The brief's "TTL of at most 48 h" is read as the expiry time, at most 24 h here; DynamoDB deletes the item within a few days of it, stated in §8.2. The hash's reversal by enumeration is accepted and recorded in §12; an HMAC would cost a second SSM parameter and an owner step. |
+| F4. The limiter fails closed: a 503 `upstream_unavailable`, logged `dynamodb` and the exception name, as the key read logs `ssm` and its (§7, §8.4) | Failing open would leave spend bounded only by concurrency and Anthropic's limit. Both writes share one deadline, `LIMITS_TIMEOUT_MS` = 500 ms, a named constant: the first request after a deploy is a cold start, and a 503 logged `dynamodb AbortError` there means raising it. The client gets `maxAttempts: 2`, as the SSM client does. |
+| F5. Two codes, `ip_limit_reached` and `daily_limit_reached`; one fixed string, `LIMIT_MESSAGE`; `retry-after` in whole seconds to the next 00:00 UTC, 1 to 86 400; the log key `limitReached` (§7, §7.1, §8.4) | Two codes so the frontend can tell "you" from "everyone". The string avoids "hoy", since the counters reset at 19:00 in Bogotá, and "en este momento", which is `UPSTREAM_MESSAGE`'s wording for an outage. `retry-after` is exposed through CORS because it is not a safelisted response header. |
+| F6. `UrlAuthType`, `AWS_IAM` or `NONE`, default `AWS_IAM`, deployed `NONE`; the two public permissions declared in the template under `Condition: UrlIsPublic`; CORS for `https://estebancitox.github.io` and `http://localhost:5173`, `POST`, `content-type`, `retry-after` exposed, `MaxAge` 600 (§8.2) | Measured with aws-sam-translator 1.116.0 on 2026-10-31 and again on 2026-11-01: with `AuthType: !Ref UrlAuthType` SAM generates no permission, so the URL would answer 403 ("even if the function URL uses the NONE auth type", "Control access to Lambda function URLs", read on 2026-11-01, <https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html>); with a literal `NONE` it generates two. So the template declares them itself, with the properties SAM writes and its own names. The default is the private value, so a deploy that forgets the override cannot open the URL. `MaxAge` is set because AWS's two pages give different defaults, 5 and 0; 600 s is about one preflight per visit, a change reaches browsers within ten minutes, and it is under Chromium's 7 200 s cap. Rejected: a literal `NONE`, simpler, with going private a one-line edit plus a deploy; and adding `localhost` only in stage 2. |
+| F7. Two metric filters on `inputTokens` and `outputTokens`; one alarm on `(inputTokens × 2 + outputTokens × 10) / 10^6` over a sliding 24 h, at `DailySpendAlarmUsd` = $0.50; an SNS topic with no subscription; the owner subscribes outside the repository and sets Anthropic's spend limit, $20 a month suggested, before the public deployment (§8.2) | A filter carries one transformation. The prices are pinned to `PRICE_USD_PER_MTOK` of `src/eval/suite.ts` by `src/template.test.ts`. The window is a sliding day evaluated every minute, not a UTC day, so it can hold two days' caps; missing data does not breach. $0.50 is about 53 requests at the mean, below the cap by design. The alarm inherits the §8.4 lower bound. The Anthropic limit is the only control outside this repository, so it exists first. Rejected: an AWS Budget, since the AWS side is cents. |
+| F8. `npm audit fix` without `--force`, then `vitest` pinned to 4.1.12 by `npm install --save-dev --save-exact` | Measured on 2026-10-31 on a scratch copy and on 2026-11-01 in the repository: `npm audit fix` moves fast-uri 3.1.8 to 3.1.9, vite 8.3.1 to 8.3.5 and source-map-js 1.2.1 to 1.2.2 in the lockfile, and leaves vitest and @vitest/mocker at 4.1.11, because the exact pin puts 4.1.12 "outside the stated dependency range", for which npm offers only `--force`. The patch bump was the owner's call, approved on 2026-11-01. Five findings before, three moderate and two high; zero after; no major version moved. |
+| F9. The limiter is off when `LIMITS_TABLE` is unset or empty; the template always sets it | The §10 harness runs in process with no table and uses no quota; the tests inject a fake client. |
+| F10. `@aws-sdk/client-dynamodb` 3.1144.0, exact, bundled; two conditional `UpdateItem`s, not `TransactWriteItems`; the per-client write first | The SSM client's version; adding it moves five shared packages within client-ssm's ranges (`@aws-sdk/core` 3.978.1 to 3.979.1, `@aws-sdk/types` 3.974.6 to 3.975.0, `@aws-sdk/xml-builder` 3.972.41 to 3.972.42, `@smithy/core` 3.35.1 to 3.38.1, `@smithy/signature-v4` 5.7.4 to 5.7.5) and adds six. A transaction is cancelled by a conflict between two concurrent requests, which would then fail closed, and costs two write units. A client refused on the shared cap is still counted for its address, visible only as `ip_limit_reached` after ten such attempts. Rejected: the runtime's SDK as an external, whose version floats with the runtime. |
+| F11. SPEC version 1.5; `evals/cases.json` version stays 1; schema `$id` and file stay `.v1.json`; the engine pin is unchanged; no new eval case | No input field, rule list or budget changed; the §2.2 block is byte-identical; nothing under `evals/`, `schemas/` or `src/engine/` changed. A 429 never reaches the model, so unit tests cover it. Both stored runs, replayed on 2026-11-01 at 61db6d7 and at the session's HEAD on copies outside the repository, keep every verdict: 26 runs each, every rule passed. |
+| N1. The §7 503 row names the counters, and the paragraph after the table says what their failure looks like | Without it F4's 503 had no row. Precedent: D5. |
+| N2. §7.1 says "three fixed strings" | `LIMIT_MESSAGE` is the third. |
+| N3. §12: the real clock is never consulted *by the explanation* | The limiter reads it for the UTC day; nothing of the explanation depends on it. |
+| N4. The two update expressions ran against dynalite 4.0.0 from a scratchpad on 2026-11-01, with the real client and the module bundled by esbuild | No Java and no Docker for DynamoDB Local on the machine. With the caps at 2 and 3 the five calls gave admitted, admitted, refused `ip`, admitted, refused `daily`, and every item held `requests` and `expiresAt` equal to the next UTC midnight. The first run against DynamoDB itself is the owner's smoke test; a defect there shows as a 503, not as unmetered spend. |
+| Checked before the push: a fresh-clone `npm ci`, the template translated offline, `shellcheck` 0.11.0 on `scripts/invoke.sh` | On 2026-11-01, at 8942e81: `npm ci` in a fresh clone installed 93 packages with 0 vulnerabilities under npm 12.2.0 and under npm 10.9.9, CI's, with `tsc` clean and 573 tests under each TZ. The template, with an S3 `CodeUri` in a scratchpad copy, translated with aws-sam-translator 1.116.0 for both `UrlAuthType` values: the two permissions carry the condition, SAM adds none, and the `Cors` block comes out as written. `shellcheck` reported the same two info-level SC2016 notes as at 61db6d7, on the inline `node -e` blocks, and nothing else. The hosted transform may differ from 1.116.0; the owner's change set is the check. |
+
 ---
 
 ## 14. Open questions
@@ -1463,6 +1577,10 @@ were done in v1.3. The line references of the v1.2 text are to b8d61b8.
 2. **Rate limiting.** §8.2 specifies a per-IP limit and a daily spend alarm as
    specified-not-built. Is that the right shape for the public deployment, or should v1 ship
    behind a single shared key until v2 brings per-user limits?
+   Answered 2026-11-01 (v1.5): built as two daily request caps in the function, per client
+   address and for every client together, and a CloudWatch spend alarm (§8.2; §13, F1 to F7).
+   A single shared key was rejected: it would sit in the public frontend's code, readable by
+   anyone who opens the page, so it would bound nothing a cap does not.
 
 3. **Entity-name cap provenance.** v1 rejects names over 60 characters (§8.1). The cap is
    inherited from the frontend *serializer*, not the engine, so the API is adopting a number it

@@ -1,8 +1,8 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { PRICE_USD_PER_MTOK } from './eval/suite'
+import { PRICE_USD_PER_MTOK, costUsd } from './eval/suite'
 import { limitReached } from './response'
-import { SPEC_MD } from './test-support/contract'
+import { SPEC_MD, specTableRows } from './test-support/contract'
 
 /**
  * template.yaml against SPEC §8.2 and against the code it configures. The template is read as
@@ -168,5 +168,56 @@ describe('the spend alarm (SPEC §8.2, decision F7)', () => {
     expect(block('SpendAlarmTopicArn')).toMatch(/^    Value: !Ref SpendAlarmTopic$/m)
     expect(block('SpendAlarmName')).toMatch(/^    Value: !Ref DailySpendAlarm$/m)
     expect(block('LimitsTableName')).toMatch(/^    Value: !Ref LimitsTable$/m)
+  })
+})
+
+describe('SPEC §8 and §8.2 state the template defaults and figures derived from the stored run', () => {
+  const parameterDefault = (name: string) => {
+    const m = /^    Default: ([\d.]+)$/m.exec(block(name))
+    if (!m) throw new Error(`no numeric Default for ${name}`)
+    return Number(m[1])
+  }
+
+  it('the two §8 cap rows are the template defaults', () => {
+    const rows = specTableRows('| Limit | Value | Basis |')
+    const value = (limit: string) => {
+      const row = rows.find(([name]) => name === limit)
+      if (!row) throw new Error(`no §8 row ${limit}`)
+      return Number(row[1])
+    }
+    expect(value('Requests per UTC day, every client together')).toBe(parameterDefault('DailyRequestLimit'))
+    expect(value('Requests per UTC day, per client address')).toBe(parameterDefault('IpDailyRequestLimit'))
+    expect([parameterDefault('DailyRequestLimit'), parameterDefault('IpDailyRequestLimit')]).toEqual([100, 10])
+  })
+
+  it('§8.2: the daily cost figures and the alarm threshold follow from the 2026-10-29 run at the §10 prices', () => {
+    const stored = JSON.parse(
+      readFileSync(new URL('../evals/runs/2026-10-29T23-18-30Z/results.json', import.meta.url), 'utf8'),
+    ) as { runs: { calls: number; inputTokens: number | null; outputTokens: number | null }[] }
+    const calls = stored.runs.filter((r) => r.calls > 0)
+    expect(calls).toHaveLength(24)
+    expect(calls.every((r) => r.calls === 1)).toBe(true)
+    const total = calls.reduce((sum, r) => sum + costUsd(r.inputTokens ?? 0, r.outputTokens ?? 0), 0)
+    expect(total.toFixed(6)).toBe('0.224490')
+    const mean = total / calls.length
+    expect(mean.toFixed(6)).toBe('0.009354')
+    // The SPEC wraps its lines, so the phrases are matched with runs of whitespace as one space.
+    const spec = SPEC_MD.replace(/\s+/g, ' ')
+    expect(spec).toContain('($0.224490 over 24 calls, $0.009354)')
+    // 100 requests a day at the mean, and at most 200 calls at the largest input with a full reply.
+    expect((100 * mean).toFixed(2)).toBe('0.94')
+    const largestInput = Math.max(...calls.map((r) => r.inputTokens ?? 0))
+    expect(largestInput).toBe(4687)
+    expect(costUsd(largestInput, 600).toFixed(6)).toBe('0.015374')
+    expect((200 * costUsd(largestInput, 600)).toFixed(2)).toBe('3.07')
+    expect(spec).toContain("100 requests a day cost $0.94 at that run's mean per call")
+    expect(spec).toContain('at most $3.07 if every request retried')
+    expect(spec).toContain('($0.015374 a call)')
+    // The alarm rings before the shared cap is reached.
+    const threshold = parameterDefault('DailySpendAlarmUsd')
+    expect(threshold).toBe(0.5)
+    expect(Math.floor(threshold / mean)).toBe(53)
+    expect(Math.floor(threshold / mean)).toBeLessThan(parameterDefault('DailyRequestLimit'))
+    expect(spec).toContain('$0.50 is about 53 requests, below the 100-request cap by design')
   })
 })
