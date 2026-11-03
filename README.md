@@ -229,10 +229,10 @@ The SPEC and the ten evaluation cases were written and reviewed before any code
 existed: the first commit, on 2026-09-14, is the contract, the fixtures and the
 record of an adversarial review of both. Each milestone since then has had one
 plan stop with a human veto, one independent review of its diff, and a learning
-log entry. The work was AI-assisted in Claude Code: 30 of the 38 commits carry a
-`Co-Authored-By` trailer naming the model, and the others predate the habit, not
-the assistance. The numbers in this README come from command output, stored
-runs and files, not from memory.
+log entry. The work was AI-assisted in Claude Code: 30 of the 38 commits up to
+2026-11-01 carry a `Co-Authored-By` trailer naming the model, and the others
+predate the habit, not the assistance. The numbers in this README come from
+command output, stored runs and files, not from memory.
 
 ## The endpoint
 
