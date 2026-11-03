@@ -20,8 +20,9 @@ first.
 
 1. **Validate.** The body is refused over 8 KiB, before it is parsed; then JSON,
    the schema (`schemas/explain-request.v1.json`), the engine's own validation,
-   the per-rung range limits and `asOfDate`, in that order. Any failure is a 400
-   with a fixed message and the engine's issues verbatim. Nothing has been spent.
+   the per-rung range limits and `asOfDate`, in that order. Over the cap is a
+   413; any later failure is a 400 with a fixed message and the failing stage's
+   issues, the engine's verbatim. Nothing has been spent.
 2. **Recompute.** The vendored engine (`src/engine/`) computes every figure:
    period rates, gross interest rounded per rung, withholding on the rounded
    gross, maturities, per-entity exposure against the deposit-insurance ceiling.
@@ -36,8 +37,9 @@ first.
    20 s deadline.
 5. **Verify.** The rules of SPEC §11, derived for this request alone (§11.12),
    run on the reply: every number, date and percentage is one the server
-   computed; every rung and every entity is mentioned; each of the four risks is
-   flagged if and only if the engine triggered it; no advice verbs; Spanish; a
+   computed; every entity is mentioned, and every rung when there are at most
+   six on distinct dates; each of the four risks is flagged if and only if the
+   engine selected it, at most three by priority; no advice verbs; Spanish; a
    word budget by rung count; a guard against instructions smuggled in an entity
    name.
 6. **Return, retry or refuse.** A reply that passes is returned as is. One that
@@ -72,11 +74,11 @@ with a label from a closed vocabulary. The second case's run 1 ends with:
 ## The number stays honest
 
 The policy at the head of the SPEC is the design in one sentence: **the number
-stays honest; the claim moves, not the code.** Thresholds, comparison semantics
-and rule definitions are fixed in the SPEC and are never loosened to make a run
-look better. When the engine changes a formula, fixture numbers follow it; the
-rules and thresholds do not. A rule that fails in production is not loosened
-either: the answer is a retry, a 502 and a logged rule name.
+stays honest — the claim moves, not the code.** Thresholds, comparison
+semantics and rule definitions are fixed in the SPEC and are never loosened to
+make a run look better. When the engine changes a formula, fixture numbers
+follow it; the rules and thresholds do not. A rule that fails in production is
+not loosened either: the answer is a retry, a 502 and a logged rule name.
 
 The same discipline bounds what the model may say:
 
@@ -104,8 +106,9 @@ engine the endpoint runs to derive the allowed numbers, so ground truth cannot b
 influenced by whoever wrote the fixture. The last paid run, on 2026-10-29
 (`evals/runs/2026-10-29T23-18-30Z/`), made 26 runs and 24 model calls, three per
 valid case, and every rule passed in every run. It cost $0.224490 at list prices,
-$0.00935 per call on average, and the model answered within 3 344 ms at the 95th
-percentile and 3 594 ms at worst. A stored run can be re-scored for free:
+$0.00935 per call on average, and the handler answered, model call included,
+within 3 344 ms at the 95th percentile and 3 594 ms at worst. A stored run can
+be re-scored for free:
 `npm run eval:replay` re-evaluates its replies with the rules as they are now and
 writes a report beside them, never rewriting the measurement.
 
@@ -119,15 +122,15 @@ The engine is a vendored copy, not a dependency: 18 files extracted from commit
 edited, with a SHA-256 per file in `src/engine/VENDOR.md` that `src/vendor.test.ts`
 re-hashes on every test run. CI (`.github/workflows/ci.yml`) runs the typecheck,
 the two-zone suite and `scripts/verify-vendor.sh` against the pinned commit on
-every push, with its actions pinned to commit SHAs; a second workflow
+every push to `main`, with its actions pinned to commit SHAs; a second workflow
 (`drift.yml`) compares `src/engine` at upstream `main` with the pin every Monday
 and fails when they differ. No badge: the pipeline is the statement.
 
 ## Running in public
 
-A public endpoint spends money per request for anyone who calls it, so three
-controls stand between a request and the model, and a fourth watches the spend
-(SPEC §8.2).
+A public endpoint spends money per request for anyone who calls it, so the
+daily caps and a concurrency limit stand between a request and the model, and
+a spend alarm watches the spend (SPEC §8.2).
 
 - **Two daily caps, counted before the model is called.** 100 requests per UTC
   day for every client together and 10 per client address (`DailyRequestLimit`
@@ -135,7 +138,8 @@ controls stand between a request and the model, and a fourth watches the spend
   DynamoDB table with a TTL. Only a request that passed validation counts. A
   refused request is a 429 with the fixed message and a `retry-after` header,
   the seconds until the next 00:00 UTC. The table stores a hash of the day and
-  the address, never the address. A counter that cannot be written within
+  the address, never the address, though an IPv4 hash is reversible by
+  enumeration, as SPEC §12 records. A counter that cannot be written within
   1 500 ms refuses the request with a 503 rather than admitting it uncounted.
 - **Concurrency.** At most two requests spend money at the same time
   (`ReservedConcurrentExecutions: 2`). Set to 0 by hand, it is the kill switch:
@@ -144,8 +148,8 @@ controls stand between a request and the model, and a fourth watches the spend
   an alarm prices them at list prices over a sliding 24 hours and fires at $0.50
   (`DailySpendAlarmUsd`) through an SNS topic the owner subscribes to outside
   the repository. At the measured mean that is about 53 requests, below the cap
-  by design. The hard ceiling is a monthly spend limit of $20 on the Anthropic
-  organization, which is prepaid with auto-reload off.
+  by design. The hard ceiling is the Anthropic organization's monthly spend
+  limit, $20 as set on 2026-11-01, on a prepaid balance with auto-reload off.
 - **CORS, which is not access control.** The URL names two origins,
   `https://estebancitox.github.io` and `http://localhost:5173`, the method
   `POST`, the header `content-type`, and exposes `retry-after`. It tells a
@@ -163,7 +167,8 @@ override cannot open the URL.
 
 ## Run it yourself
 
-Node 22 or later; nothing else is needed for the tests or a free replay.
+Node 22, the version CI runs; nothing else is needed for the tests or a free
+replay.
 
 ```sh
 npm ci
@@ -184,7 +189,7 @@ API_KEY_PARAMETER=/lab-cdt-ladder-api/anthropic-api-key AWS_PROFILE=lab AWS_REGI
 ```
 
 Deploying is `sam build` and `sam deploy --guided` with the AWS SAM CLI. The
-template's four parameters are the key's parameter name, `UrlAuthType`
+template's five parameters are the key's parameter name, `UrlAuthType`
 (`AWS_IAM` by default, so the URL is private until `NONE` is passed), the two
 caps and the alarm threshold. `scripts/invoke.sh` then sends one request from a
 case of `evals/cases.json` to the deployed URL, signed with SigV4 by default, or
@@ -198,8 +203,7 @@ The SPEC is long on purpose: it is the contract, and the code is tested against
 it.
 
 - `SPEC.md`: 1 608 lines, v1.5. §13 "Decisions" carries each revision's
-  accepted, deferred and rejected items with dates, so the history reads in one
-  screen per version.
+  accepted, deferred and rejected items with dates.
 - `docs/spec-review.md`: the adversarial review of 2026-09-13 that §13 points at.
   270 claims checked, 3 refuted, and the finding that moved the client out of
   the trust boundary.
@@ -227,18 +231,20 @@ it.
 
 The SPEC and the ten evaluation cases were written and reviewed before any code
 existed: the first commit, on 2026-09-14, is the contract, the fixtures and the
-record of an adversarial review of both. Each milestone since then has had one
-plan stop with a human veto, one independent review of its diff, and a learning
-log entry. The work was AI-assisted in Claude Code: 30 of the 38 commits up to
-2026-11-01 carry a `Co-Authored-By` trailer naming the model, and the others
-predate the habit, not the assistance. The numbers in this README come from
-command output, stored runs and files, not from memory.
+record of an adversarial review of both. Each milestone since the first
+deployment has had at least one independent review of its diff and a learning
+log entry; plans stopped for a human veto before any change. The work was
+AI-assisted in Claude Code: 30 of the 38 commits up to 2026-11-01 carry a
+`Co-Authored-By` trailer naming the assisting model, and the others predate the
+habit, not the assistance. The numbers in this README come from command output,
+stored runs and files, not from memory.
 
 ## The endpoint
 
-`POST /` with a JSON body `{ asOfDate, ladder }` (SPEC §2). Every reply is JSON
-with a `text` field; on anything but a 200, `text` is one of three fixed strings
-and `error.code` says why (SPEC §7, §7.1).
+`POST /` with a JSON body `{ asOfDate, ladder }` (SPEC §2). Every reply the
+function writes is JSON with a `text` field; on anything but a 200, `text` is
+one of three fixed strings and `error.code` says why (SPEC §7, §7.1). The
+platform's own 429 in the table is the exception.
 
 | Status | `error.code` | When | What the client sees |
 |---|---|---|---|
