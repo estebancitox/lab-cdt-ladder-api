@@ -37,11 +37,11 @@ first.
    20 s deadline.
 5. **Verify.** The rules of SPEC §11, derived for this request alone (§11.12),
    run on the reply: every number, date and percentage is one the server
-   computed; every entity is mentioned, and every rung when there are at most
-   six on distinct dates; each of the four risks is flagged if and only if the
-   engine selected it, at most three by priority; no advice verbs; Spanish; a
-   word budget by rung count; a guard against instructions smuggled in an entity
-   name.
+   computed; every entity that holds a rung is mentioned, and every rung when
+   there are at most six on distinct dates; each of the four risks is flagged
+   if and only if the engine selected it, at most three by priority; no advice
+   verbs; Spanish; a word budget by rung count; a guard against instructions
+   smuggled in an entity name.
 6. **Return, retry or refuse.** A reply that passes is returned as is. One that
    fails is never returned, with or without a warning: the handler retries once
    when the time budget allows it, and otherwise answers 502 with the failed
@@ -232,12 +232,12 @@ it.
 The SPEC and the ten evaluation cases were written and reviewed before any code
 existed: the first commit, on 2026-09-14, is the contract, the fixtures and the
 record of an adversarial review of both. Each milestone since the first
-deployment has had at least one independent review of its diff and a learning
-log entry; plans stopped for a human veto before any change. The work was
-AI-assisted in Claude Code: 30 of the 38 commits up to 2026-11-01 carry a
-`Co-Authored-By` trailer naming the assisting model, and the others predate the
-habit, not the assistance. The numbers in this README come from command output,
-stored runs and files, not from memory.
+deployment has a learning log entry; most had a plan stop with a human veto and
+an independent review of their diff, and every one since 2026-10-28 has had
+both. The work was AI-assisted in Claude Code: 30 of the 38 commits up to
+2026-11-01 carry a `Co-Authored-By` trailer naming the assisting model, and the
+others predate the habit, not the assistance. The numbers in this README come
+from command output, stored runs and files, not from memory.
 
 ## The endpoint
 
