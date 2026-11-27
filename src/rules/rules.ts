@@ -1,6 +1,6 @@
 import type { RiskKey } from '../explain'
 import { ERROR_MESSAGE } from '../request/errors'
-import { NUMERIC_RUN, valueOfRun } from './ground-truth'
+import { NUMERIC_RUN, signBefore, valueOfRun } from './ground-truth'
 import { fold } from './normalize'
 import type { GroundTruth, Verdict } from './types'
 
@@ -96,11 +96,8 @@ export function numbersSubsetOfInput(masked: string, truth: GroundTruth): Verdic
   // Step 4: no signed run. A `-` immediately before the run, or before the `COP` that N step 8
   // joined to it.
   for (const run of runs) {
-    const at = run.index
-    const code = text.slice(at - 3, at) === 'COP' ? 'COP' : ''
-    if (text[at - code.length - 1] === '-') {
-      return { rule, pass: false, evidence: `signed figure: -${code}${run[0]}` }
-    }
+    const sign = signBefore(text, run.index)
+    if (sign !== '') return { rule, pass: false, evidence: `signed figure: ${sign}${run[0]}` }
   }
   // Step 5: every run is well formed, or it has no reading.
   const values = runs.map((run) => ({ run: run[0], value: valueOfRun(run[0]) }))

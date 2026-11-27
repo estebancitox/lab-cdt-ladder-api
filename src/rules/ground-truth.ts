@@ -1,6 +1,7 @@
 import { MONTHS_SHORT, parseISODate, type ISODate } from '../engine'
 import type { ExplanationView } from '../explain'
 import type { ExplainRequest } from '../request/schema'
+import { normalize } from './normalize'
 import type { GroundTruth, RungTruth } from './types'
 
 /**
@@ -62,15 +63,29 @@ export function valueOfRun(run: string): number | null {
 }
 
 /**
- * SPEC §11.3 step 1: the number inside a display string, read with the grammar of §3.4. A
- * display string holds exactly one numeric run. `COP 1,234,567` → 1234567, `13.5%` → 13.5.
+ * SPEC §3.4 step 4: the sign of the run that begins at `at`. A run is signed when a `-` stands
+ * immediately before it, or immediately before a `COP` that stands immediately before it, which
+ * is where step 8 of N leaves the code. The text is one that N has been applied to.
+ */
+export function signBefore(text: string, at: number): '' | '-' | '-COP' {
+  if (at >= 1 && text[at - 1] === '-') return '-'
+  if (at >= 4 && text.slice(at - 4, at) === '-COP') return '-COP'
+  return ''
+}
+
+/**
+ * SPEC §11.3 step 1: the number inside a display string, read with the grammar of §3.4, as a
+ * figure of a reply is read: after N, one numeric run, its value, and its sign.
+ * `COP 1,234,567` → 1234567, `13.5%` → 13.5, and the formatter's negative form `-COP 1,234` →
+ * -1234, as the reading table of §3.4 has it. No view holds a negative amount (§3.3, §12).
  */
 export function numberOfDisplay(display: string): number {
-  const runs = display.match(NUMERIC_RUN) ?? []
+  const text = normalize(display)
+  const runs = [...text.matchAll(NUMERIC_RUN)]
   if (runs.length !== 1) throw new Error(`not exactly one number in display string: ${display}`)
-  const value = valueOfRun(runs[0])
+  const value = valueOfRun(runs[0][0])
   if (value === null) throw new Error(`malformed number in display string: ${display}`)
-  return value
+  return signBefore(text, runs[0].index) === '' || value === 0 ? value : -value
 }
 
 /**

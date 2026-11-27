@@ -18,6 +18,7 @@ import {
   fullDates,
   groundTruthFrom,
   numberOfDisplay,
+  signBefore,
   valueOfRun,
 } from './ground-truth'
 
@@ -84,8 +85,23 @@ describe('SPEC §3.4: the grammar of figures', () => {
     expect(numberOfDisplay(formatPercent(0.4706))).toBe(47.06)
     expect(numberOfDisplay(formatPercent(0.04))).toBe(4)
     expect(numberOfDisplay(formatPercent(1))).toBe(100)
-    // The sign is not part of a run: a display string is a value, and §11.3 step 4 reads signs.
-    expect(numberOfDisplay(formatCOP(-1234))).toBe(1234)
+    // The formatter's negative forms read as negative figures, by the sign rule of step 4. No
+    // view holds one; a zero has no sign to carry.
+    expect(numberOfDisplay(formatCOP(-1234))).toBe(-1234)
+    expect(numberOfDisplay(formatPercent(-0.05))).toBe(-5)
+    expect(numberOfDisplay(formatCOP(-0))).toBe(0)
+    expect(numberOfDisplay(formatPercent(-0))).toBe(0)
+  })
+
+  it('a run is signed by a hyphen-minus right before it, or right before its COP (step 4)', () => {
+    expect(signBefore('-COP1,234', 4)).toBe('-COP')
+    expect(signBefore('-5%', 1)).toBe('-')
+    expect(signBefore('rungs 1-3', 8)).toBe('-')
+    // Not immediately before: a space, the code alone, or a minus that is not U+002D.
+    expect(signBefore('- COP1,234', 5)).toBe('')
+    expect(signBefore('COP1,234', 3)).toBe('')
+    expect(signBefore('\u2212COP1,234', 4)).toBe('')
+    expect(signBefore('5', 0)).toBe('')
   })
 
   it('a display string holds exactly one well-formed run, or it has no reading', () => {

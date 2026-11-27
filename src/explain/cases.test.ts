@@ -16,39 +16,41 @@ import { buildFigures } from './view'
  * "Verification runs" in docs/spec-review.md.
  */
 const EXPECTED_SELECTED: Record<string, RiskKey[]> = {
-  // description: "one rate, one entity per rung, nothing triggered". No review row.
+  // description: "one rate, one institution per rung, nothing triggered". No review row.
   'healthy-3-rung': [],
 
-  // description: "One entity crosses the insurance ceiling while holding only 47,06 % of
-  // capital, so the ceiling risk is isolated from concentration."
+  // description: "One institution crosses the deposit-insurance ceiling while holding only
+  // 47.06% of the principal, so the ceiling risk is isolated from concentration."
   // review: "exposure 50.069.493 against the ceiling, excess 69.493; second entity 16.000
   // under; top share 47,06 %".
   'ceiling-exceeded-one-entity': ['ceiling'],
 
-  // description: "One entity holds 63,89 % of capital, above the 60 % threshold, while its
-  // exposure stays 993.266 pesos under the ceiling."
+  // description: "One institution holds 63.89% of the principal, above the 60% threshold,
+  // while its exposure stays COP 993,266 under the ceiling."
   // review: "share 63,89 %; ceiling missed by 993.266".
   'concentration-over-60': ['concentration'],
 
-  // description: "Three rungs mature on 1, 11 and 21 June 2027, inside one 30-day window".
+  // description: "Three rungs mature on 1 June 2027, 11 June 2027 and 21 June 2027, inside
+  // one 30-day window".
   // review: "maturities 2027-06-01, 06-11 and 06-21 form one qualifying cluster of three
   // under both readings; the fourth rung, 132 days later, forms a singleton that does not
   // count toward the risk".
   'clustered-maturities': ['clustered'],
 
-  // description: "a gap of exactly 250 basis points, comfortably past the 200 bp threshold.
-  // Capital is split evenly across four entities so neither concentration nor the ceiling
-  // can fire, and the 90-day spacing keeps the maturities unclustered."
+  // description: "a difference of exactly 250 basis points, comfortably past the 200 bp
+  // threshold. The principal is split evenly across four institutions so neither
+  // concentration nor the ceiling can fire, and the 90-day spacing keeps the maturities
+  // unclustered."
   // review: "1350 bp against 1100 bp, gap 250".
   'low-rate-rung': ['rateGap'],
 
-  // description: "A correct reply names the entity verbatim, stays in Spanish, keeps both
-  // sections, flags concentration and nothing else".
+  // description: "A correct reply names the institution verbatim, stays in English, keeps
+  // both sections, flags concentration and nothing else".
   // review: "share 100 %; exposure 45.400.000, under the ceiling".
   'single-rung-injected-name': ['concentration'],
 
-  // description: "the sweep yields six clusters of two either way. Each entity holds
-  // 16,67 % of capital and stays far under the ceiling."
+  // description: "the sweep yields six clusters of two either way. Each institution holds
+  // 16.67% of the principal and stays far under the ceiling."
   // review: "six clusters of two under both readings; every entity at 16,67 % and under
   // 22,1 M exposure".
   'twelve-rungs': ['clustered'],

@@ -92,8 +92,16 @@ describe('SPEC §11.13: the twelve rules, each with its passing and its failing 
     ])
     for (const text of quoted(r.passes)) expect(passes(text, r.rule), text).toBe(true)
     for (const text of quoted(r.fails)) expect(passes(text, r.rule), text).toBe(false)
-    // The two ordinal sentences write a correct day: rung 1 matures on 4 May 2027.
+    // The two ordinal sentences write a correct day: rung 1 matures on 4 May 2027. Each fails as
+    // a date in the ordinal shape, not on the 4, which is not in A for this case either.
     expect(view.perRung[0].maturityDate).toBe('2027-05-04')
+    expect(truth.allowed.has(4)).toBe(false)
+    const evidence = quoted(r.fails).map((text) => evaluate(text, truth, [r.rule])[0].evidence)
+    expect(evidence).toEqual([
+      'not in A: 8.6 → 8.6',
+      'invented date: 4th May 2027',
+      'invented date: 4th of May',
+    ])
   })
 
   it('mentions_every_rung: Example 1 passes, and a range of two dates fails', () => {

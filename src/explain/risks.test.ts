@@ -106,7 +106,7 @@ describe('rate gap trigger: maxBp − bp >= 200 in integer basis points (SPEC §
   })
 
   it('names every rung at or beyond the gap by its perRung index', () => {
-    // low-rate-rung: 13,5 / 13,5 / 11,0 / 13,5 at 90/180/270/360 days; the low rung sorts third.
+    // low-rate-rung: 13.5% / 13.5% / 11% / 13.5% at 90/180/270/360 days; the low rung sorts third.
     expect(rateGapRisk(figuresOf(inputOf('low-rate-rung')))).toEqual({
       triggered: true,
       maxBp: 1350,

@@ -11,7 +11,13 @@ import {
   specTableRows,
 } from '../test-support/contract'
 import { entitySpans, mask } from './entities'
-import { FULL_MONTHS, NUMERIC_RUN, groundTruthFrom, valueOfRun } from './ground-truth'
+import {
+  FULL_MONTHS,
+  NUMERIC_RUN,
+  groundTruthFrom,
+  numberOfDisplay,
+  valueOfRun,
+} from './ground-truth'
 import { fold, normalize } from './normalize'
 import { MONTHS_SHORT } from '../engine'
 import {
@@ -82,7 +88,10 @@ describe('SPEC §3.4: the reading table', () => {
         expect(numbersSubsetOfInput(afterN, allowing(Number(reading))).pass, text).toBe(true)
         expect(numbersSubsetOfInput(afterN, allowing()).pass, text).toBe(false)
       } else if (reading === '-1234, a negative figure') {
-        // Its value is in A here, and it still fails: on its sign, before membership.
+        // Read as a display string it is the negative figure the table gives. In a reply, with
+        // its unsigned value in A, it still fails: on its sign, before membership.
+        expect(numberOfDisplay(text)).toBe(Number(reading.split(',')[0]))
+        expect(numberOfDisplay(text)).toBe(-1234)
         expect(valueOfRun(runs[0] ?? '')).toBe(1234)
         expect(numbersSubsetOfInput(afterN, allowing(1234))).toMatchObject({
           pass: false,
@@ -658,6 +667,15 @@ describe('SPEC §11.8 language_en', () => {
     })
     expect(run(CLEAN + ' La tasa y el interés.').evidence).toBe('Spanish: La, tasa, y, el, interés')
     expect(SPANISH_WORDS.flags).toBe('gi')
+    // Every entry of the list fails a reply when it stands as a word, written as listed or in
+    // capitals, `peldaño` and `interés` with their non-ASCII letters included.
+    const entries = SPANISH_WORDS.source.slice('\\b('.length, -')\\b'.length).split('|')
+    expect(entries).toHaveLength(18)
+    for (const word of entries) {
+      expect(run(`${CLEAN} A ${word}.`).evidence, word).toBe(`Spanish: ${word}`)
+      const capitals = word.toUpperCase()
+      expect(run(`${CLEAN} A ${capitals}, here`).evidence, capitals).toBe(`Spanish: ${capitals}`)
+    }
   })
 
   it("both lists and the camelCase pattern are the SPEC's, verbatim", () => {
@@ -808,7 +826,9 @@ describe('SPEC §11.11 error_message_exact', () => {
       rule: 'error_message_exact',
       pass: true,
     })
-    expect(errorMessageExact(200, ERROR_MESSAGE, 0)).toMatchObject({ evidence: 'status 200' })
+    expect(errorMessageExact(200, ERROR_MESSAGE, 0)).toMatchObject({
+      evidence: 'status 400'.replace('400', '200'),
+    })
     expect(errorMessageExact(400, ERROR_MESSAGE.replace('valid', 'Valid'), 0).pass).toBe(false)
     expect(errorMessageExact(400, `${ERROR_MESSAGE} `, 0).pass).toBe(false)
     expect(errorMessageExact(400, 'Invalid input.', 0).pass).toBe(false)

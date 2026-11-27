@@ -15,8 +15,8 @@ reply. The market stays Colombian. Version 1, the Spanish system, is the tag
 **Live:** the "Explícame esta escalera" button in
 [lab-cdt-ladder](https://estebancitox.github.io/lab-cdt-ladder/), the
 calculator this endpoint explains. The URL is public within two daily caps; past
-them a request answers 429 with a fixed English message and a `retry-after`
-header.
+them a request answers 429 with a fixed message and a `retry-after` header.
+What is live stays version 1, the Spanish system, until this version is deployed.
 
 ## How a request is answered
 
@@ -32,7 +32,8 @@ first.
    period rates, gross interest rounded per rung, withholding on the rounded
    gross, maturities, per-entity exposure against the deposit-insurance ceiling.
    `src/explain/` adds the four derivations the calculator does not have (share of
-   capital, headroom, maturity clusters, rate gap) and applies the risk priority.
+   principal, headroom, maturity clusters, rate difference) and applies the risk
+   priority.
 3. **Count.** Two DynamoDB counters, one per client address and one for every
    client together, admit the request or refuse it with a 429. A request that
    failed validation never reaches them.
@@ -124,7 +125,7 @@ replies with the rules as they are now and writes a report beside them, never
 rewriting the measurement. Given a v1 run it says the run is not comparable and
 writes nothing.
 
-The test suite is 738 tests in 28 files, and `npm run test:ci` runs it twice,
+The test suite is 771 tests in 29 files, and `npm run test:ci` runs it twice,
 under `TZ=America/Bogota` and under `TZ=UTC`, because every date is
 calendar-day arithmetic that must not depend on the host's zone. The upstream
 engine's own tests, 1 032 lines in 8 files, are among them.
@@ -186,9 +187,9 @@ replay.
 ```sh
 npm ci
 npm run typecheck
-npm run test:ci          # 738 tests under TZ=America/Bogota, then under TZ=UTC
+npm run test:ci          # 771 tests under TZ=America/Bogota, then under TZ=UTC
 npm run verify:vendor    # the vendored engine against ../lab-cdt-ladder at the pinned commit
-npm run eval:replay -- evals/runs/2026-10-29T23-18-30Z/results.json   # free; a v1 run is reported as not comparable
+npm run eval:replay -- evals/runs/2026-10-29T23-18-30Z/results.json   # free; exits 3: a v1 run is not comparable
 ```
 
 A paid run needs the Anthropic API key in an AWS SSM SecureString, the name of

@@ -9,10 +9,11 @@ export const V1_PROMPT_VERSION = 'v1'
  * replies under the Spanish prompt, judged by the v1 rules. A v1 verdict and a v2 verdict are
  * verdicts of different rules on text in different languages, so such a run is not replayed:
  * under the rules of this version every one of its replies fails `language_en`, which would say
- * nothing about the run. A run records its prompt version, and that is what tells them apart.
+ * nothing about the run. A run records its prompt version, and that is what tells them apart: a
+ * file that records none cannot be told from a v1 run, and is refused with them.
  */
-export function comparable(stored: Pick<SuiteResult, 'promptVersion'>): boolean {
-  return stored.promptVersion !== V1_PROMPT_VERSION
+export function comparable(stored: { promptVersion?: unknown }): boolean {
+  return typeof stored.promptVersion === 'string' && stored.promptVersion !== V1_PROMPT_VERSION
 }
 
 /**

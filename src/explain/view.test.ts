@@ -4,7 +4,6 @@ import { VALID_CASES, acceptedRequest, caseById, inputOf } from '../test-support
 import { buildFigures } from './view'
 
 const figuresOf = (id: string) => buildFigures(acceptedRequest(caseById(id).input))
-const noSpace = (s: string) => s.replace(/\s/g, '')
 
 describe('perRung order (SPEC §3.3)', () => {
   it('is sorted by maturityDate, ties broken by rungId, index 1-based after the sort', () => {
@@ -68,7 +67,7 @@ describe('perEntity (SPEC §3.3)', () => {
       excess: 0,
       headroom: 16_000,
     })
-    expect(noSpace(byId.e1.shareOfCapitalDisplay)).toBe('47.06%')
+    expect(byId.e1.shareOfCapitalDisplay).toBe('47.06%')
     expect(byId.e1.excessDisplay).toBe('COP 69,493')
     expect(byId.e2.headroomDisplay).toBe('COP 16,000')
   })
@@ -76,7 +75,7 @@ describe('perEntity (SPEC §3.3)', () => {
   it('concentration-over-60: share 63.89%, ceiling missed by COP 993,266 (docs/spec-review.md)', () => {
     const e1 = figuresOf('concentration-over-60').perEntity.find((e) => e.entityId === 'e1')
     expect(e1).toMatchObject({ exceeded: false, excess: 0, headroom: 993_266 })
-    expect(noSpace(e1!.shareOfCapitalDisplay)).toBe('63.89%')
+    expect(e1!.shareOfCapitalDisplay).toBe('63.89%')
     expect(e1!.headroomDisplay).toBe('COP 993,266')
   })
 
@@ -84,7 +83,7 @@ describe('perEntity (SPEC §3.3)', () => {
     const { perEntity, totals } = figuresOf('twelve-rungs')
     for (const e of perEntity) expect(e.shareOfCapital).toBe(e.principal / totals.principal)
     expect(perEntity.reduce((a, e) => a + e.shareOfCapital, 0)).toBeCloseTo(1, 12)
-    expect(perEntity.map((e) => noSpace(e.shareOfCapitalDisplay))).toEqual(Array(6).fill('16.67%'))
+    expect(perEntity.map((e) => e.shareOfCapitalDisplay)).toEqual(Array(6).fill('16.67%'))
   })
 
   it('follows the entities-list order and counts only entities holding a rung', () => {

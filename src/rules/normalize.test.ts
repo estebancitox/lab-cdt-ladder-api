@@ -13,8 +13,8 @@ describe('SPEC §11.1 normalization N, step by step', () => {
   })
 
   it('3. asterisks and underscores are deleted, so a bold label survives (SPEC example)', () => {
-    expect(normalize('- **Tope del seguro:** algo')).toBe('- Tope del seguro: algo')
-    expect(normalize('_Riesgos_')).toBe('Riesgos')
+    expect(normalize('- **Deposit-insurance ceiling:** x')).toBe('- Deposit-insurance ceiling: x')
+    expect(normalize('_Risks_')).toBe('Risks')
   })
 
   it('4. the five special spaces become U+0020', () => {

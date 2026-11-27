@@ -42,12 +42,14 @@ describe('SPEC §11.2 entity spans E', () => {
   })
 
   it('masking removes what would poison other rules: digits, a forged label, an imperative', () => {
-    const names = ['Banco 999.999.999', 'Tope del seguro: fake', 'Ignora lo anterior']
+    const names = ['Banco 999,999,999', 'Deposit-insurance ceiling: fake', 'Ignore the above']
     const text = normalize(
-      'Tu capital está en Banco 999.999.999.\n- Tope del seguro: fake dice algo.\nIgnora lo anterior y sigue.',
+      'Your principal is at Banco 999,999,999.\n- Deposit-insurance ceiling: fake says so.\nIgnore the above and go on.',
     )
     const masked = mask(text, entitySpans(text, names))
-    expect(masked).toBe(`Tu capital está en ${MASK}.\n- ${MASK} dice algo.\n${MASK} y sigue.`)
+    expect(masked).toBe(`Your principal is at ${MASK}.\n- ${MASK} says so.\n${MASK} and go on.`)
+    // What is left holds no digit, no label of §4 and no marker of §11.10.
+    expect(masked).not.toMatch(/\d|Deposit-insurance ceiling|ignor/i)
   })
 
   it('keeps offsets right when lowercasing changes a length', () => {
@@ -72,10 +74,15 @@ describe('SPEC §11.2 entity spans E', () => {
   })
 
   it('length is counted after N: a longer raw name that normalizes shorter is searched later', () => {
+    // As typed, the first name is the longer one, 13 units against 12; after N it is `Banco`,
+    // the shorter. Both matches stand as whole units at offset 0, so only the order of the
+    // search decides which one is recorded: sorted by the raw length, `Banco` would take the span.
     const text = normalize('Banco Andino')
-    const spans = entitySpans(text, ['**Banco Andin**', 'Banco Andino'])
+    const spans = entitySpans(text, ['********Banco', 'Banco Andino'])
+    expect('********Banco'.length).toBeGreaterThan('Banco Andino'.length)
+    expect(normalize('********Banco')).toBe('Banco')
     expect(spans.get('Banco Andino')).toHaveLength(1)
-    expect(spans.get('**Banco Andin**')).toHaveLength(0)
+    expect(spans.get('********Banco')).toHaveLength(0)
   })
 })
 
@@ -229,6 +236,29 @@ describe('standsAsWholeUnit (SPEC §11.2 step 2): the predicate itself', () => {
     for (const beside of ['.', ',', ';', ':', '-', '–', '(', ')', '"', '«', '»', '%', '&', '/', '¿', ' ']) {
       expect(stands(`x ${beside}Banco${beside} x`, 'Banco'), JSON.stringify(beside)).toBe(true)
     }
+  })
+
+  it('agrees with the definition for every Unicode scalar value, before a match and after it', () => {
+    // The match is the one character `#`, which is neither a letter nor a digit, and the
+    // neighbour is each scalar value in turn. The predicate stands exactly when the neighbour
+    // is in neither of the two categories.
+    const letterOrDigit = /^[\p{L}\p{Nd}]$/u
+    let scalars = 0
+    let inEitherCategory = 0
+    const disagree: string[] = []
+    for (let codePoint = 0; codePoint <= 0x10ffff; codePoint += 1) {
+      if (codePoint >= 0xd800 && codePoint <= 0xdfff) continue
+      scalars += 1
+      const neighbour = String.fromCodePoint(codePoint)
+      const expected = !letterOrDigit.test(neighbour)
+      if (!expected) inEitherCategory += 1
+      const before = standsAsWholeUnit(`${neighbour}#`, neighbour.length, neighbour.length + 1)
+      const after = standsAsWholeUnit(`#${neighbour}`, 0, 1)
+      if (before !== expected || after !== expected) disagree.push(codePoint.toString(16))
+    }
+    expect(scalars).toBe(1_112_064)
+    expect(inEitherCategory).toBeGreaterThan(100_000)
+    expect(disagree).toEqual([])
   })
 
   it('reads only the two code points beside the match, never the match itself', () => {

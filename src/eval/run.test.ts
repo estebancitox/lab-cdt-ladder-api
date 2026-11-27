@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -328,10 +328,13 @@ describe('coverage', () => {
     expect(harnessVersion).toBe(2)
     expect(loadCases().map((c) => c.id)).toEqual(CASES.map((c) => c.id))
     const directory = mkdtempSync(join(tmpdir(), 'cases-'))
-    const v1 = join(directory, 'cases.json')
-    writeFileSync(v1, JSON.stringify({ version: 1, cases: [] }))
-    expect(() => loadCases(v1)).toThrow('is version 1, and this harness runs version 2')
-    rmSync(directory, { recursive: true })
+    try {
+      const v1 = join(directory, 'cases.json')
+      writeFileSync(v1, JSON.stringify({ version: 1, cases: [] }))
+      expect(() => loadCases(v1)).toThrow('is version 1, and this harness runs version 2')
+    } finally {
+      rmSync(directory, { recursive: true })
+    }
   })
 })
 
@@ -406,6 +409,10 @@ describe('replay: stored replies re-evaluated with the rules as they are now', (
     expect(V1_PROMPT_VERSION).toBe('v1')
     expect(comparable({ promptVersion: 'v2' })).toBe(true)
     expect(comparable({ promptVersion: 'v1' })).toBe(false)
+    // A file that records no prompt version cannot be told from a v1 run, and is refused too.
+    expect(comparable({})).toBe(false)
+    expect(comparable({ promptVersion: undefined })).toBe(false)
+    expect(comparable({ promptVersion: 2 })).toBe(false)
     expect(V1_RUNS).toHaveLength(2)
     for (const directory of V1_RUNS) {
       const stored = JSON.parse(
@@ -433,6 +440,100 @@ describe('replay: stored replies re-evaluated with the rules as they are now', (
           `${directory} ${r.caseId} run ${r.run}`,
         ).toBe(false)
       }
+    }
+  })
+})
+
+describe('eval:replay as a command: its exit codes, and what it writes (SPEC §10.2)', () => {
+  const root = new URL('../../', import.meta.url)
+  const pathOf = (directory: string) => new URL(`${directory}/results.json`, root).pathname
+  /** The command with both of its streams collected. */
+  async function run(path: string | undefined) {
+    const { replayCommand } = await import('./replay-command')
+    const out: string[] = []
+    const err: string[] = []
+    const code = replayCommand(path, { out: (t) => out.push(t), err: (t) => err.push(t) })
+    return { code, out: out.join(''), err: err.join('') }
+  }
+
+  it('with no path it is a usage error: exit 2', async () => {
+    expect(await run(undefined)).toEqual({
+      code: 2,
+      out: '',
+      err: 'usage: npm run eval:replay -- evals/runs/<timestamp>/results.json',
+    })
+  })
+
+  it.each([...V1_RUNS])('%s: a v1 run is not comparable: exit 3, and nothing is written', async (directory) => {
+    const path = pathOf(directory)
+    const folder = new URL(`${directory}/`, root).pathname
+    const before = readFileSync(path)
+    expect(readdirSync(folder).sort()).toEqual(['report.md', 'results.json'])
+    const result = await run(path)
+    expect(result.code).toBe(3)
+    expect(result.out).toBe('')
+    expect(result.err).toContain(`not comparable: ${path} is a v1 run`)
+    expect(result.err).toContain('SPEC §10.2')
+    expect(result.err).toContain('Nothing was written.')
+    // The folder of the stored run holds what it held, byte for byte.
+    expect(readdirSync(folder).sort()).toEqual(['report.md', 'results.json'])
+    expect(existsSync(join(folder, 'report.replay.md'))).toBe(false)
+    expect(readFileSync(path).equals(before)).toBe(true)
+  })
+
+  it('a file that records no prompt version is refused the same way', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'replay-'))
+    try {
+      const stored = JSON.parse(readFileSync(pathOf(V1_RUNS[0]), 'utf8')) as Record<string, unknown>
+      delete stored.promptVersion
+      const path = join(directory, 'results.json')
+      writeFileSync(path, JSON.stringify(stored))
+      const result = await run(path)
+      expect(result.code).toBe(3)
+      expect(result.err).toContain('records no prompt version, so it cannot be told from a v1 run')
+      expect(readdirSync(directory)).toEqual(['results.json'])
+    } finally {
+      rmSync(directory, { recursive: true })
+    }
+  })
+
+  it('a v2 run is replayed: exit 0, the report written beside the results, the results untouched', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'replay-'))
+    try {
+      const stored: import('./suite').SuiteResult = {
+        model: 'claude-sonnet-5-5',
+        promptVersion: 'v2',
+        priceUsdPerMtok: { input: 2, output: 10 },
+        startedAt: 'a fixture, not a measurement',
+        runs: [
+          {
+            caseId: 'healthy-3-rung',
+            position: 1,
+            run: 1,
+            status: 200,
+            calls: 1,
+            inputTokens: 3041,
+            outputTokens: 261,
+            latencyMs: 3535,
+            costUsd: 0.008692,
+            text: REPLY,
+            verdicts: [],
+          },
+        ],
+      }
+      const path = join(directory, 'results.json')
+      const written = JSON.stringify(stored)
+      writeFileSync(path, written)
+      const result = await run(path)
+      expect(result.code).toBe(0)
+      expect(result.err).toBe('')
+      expect(result.out).toContain('| 1 | healthy-3-rung | 1 | 10/10 |')
+      expect(result.out).toContain(`written: ${join(directory, 'report.replay.md')}`)
+      expect(readdirSync(directory).sort()).toEqual(['report.replay.md', 'results.json'])
+      expect(readFileSync(join(directory, 'report.replay.md'), 'utf8')).toContain('> What happens and when')
+      expect(readFileSync(path, 'utf8')).toBe(written)
+    } finally {
+      rmSync(directory, { recursive: true })
     }
   })
 })
