@@ -184,7 +184,7 @@ node --input-type=commonjs -e '
     .normalize("NFC")
     .split("\n")
     .map((line) => line.replace(/[    ⁠]/g, " ").replace(/[^\S\n]+/g, " ").trim())
-  const headers = ["Qué pasa y cuándo", "Riesgos"].every((header) => lines.includes(header))
+  const headers = ["What happens and when", "Risks"].every((header) => lines.includes(header))
   console.log(`text equals a SPEC 7 fixed string, byte for byte: ${fixed ?? "no"}`)
   console.log(`both SPEC 4 headers on their own lines (after SPEC 11.1 normalization): ${headers ? "yes" : "no"}`)
 ' "$response_file"

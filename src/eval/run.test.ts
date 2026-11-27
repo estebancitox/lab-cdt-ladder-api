@@ -1,7 +1,11 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ERROR_MESSAGE } from '../request/errors'
 import { UPSTREAM_MESSAGE } from '../response'
-import { CASES, caseById } from '../test-support/contract'
+import { constructedReply } from '../test-support/constructed-replies'
+import { CASES, CASES_VERSION, V1_RUNS, caseById } from '../test-support/contract'
 import type { FetchCounter } from './fetch-counter'
 
 /**
@@ -20,8 +24,8 @@ vi.mock('@aws-sdk/client-ssm', () => ({
   },
 }))
 
-const REPLY =
-  'Qué pasa y cuándo\n\nTu escalera tiene $ 50.000.000 de capital en 3 peldaños y 3 entidades. El peldaño 1 está en Banco Andino y vence el 4 de abril de 2027, el peldaño 2 en Cooperativa Ñame & Café el 3 de julio de 2027 y el peldaño 3 en Entidad B el 1 de octubre de 2027.\n\nRiesgos\n\nSin riesgos para señalar con estos datos.'
+/** The constructed reply of case 1 (SPEC §10.2): it passes its derived set and its own rules. */
+const REPLY = constructedReply('healthy-3-rung')
 
 let suite: typeof import('./suite')
 let counterModule: typeof import('./fetch-counter')
@@ -111,7 +115,7 @@ describe('a valid case through the runner', () => {
     })
     expect(result).toMatchObject({
       model: 'claude-sonnet-5-5',
-      promptVersion: 'v1',
+      promptVersion: 'v2',
       priceUsdPerMtok: { input: 2, output: 10 },
     })
     expect(result.runs.map((r) => r.run)).toEqual([1, 2, 3])
@@ -139,7 +143,7 @@ describe('a valid case through the runner', () => {
 
   // A reply that fails numbers_subset_of_input never reaches the runner as a 200: the handler
   // verifies it (SPEC §7.4), retries once, and answers 502 when the retry fails too.
-  const INVENTED = REPLY.replace('$ 50.000.000', '$ 50.000.001')
+  const INVENTED = REPLY.replace('COP 50,000,000', 'COP 50,000,001')
 
   it('a reply failing verification twice is a 502 run: two calls, both spends, every rule failed on the status', async () => {
     vi.stubGlobal('fetch', fakeApi(INVENTED))
@@ -184,13 +188,14 @@ describe('a valid case through the runner', () => {
     expect(report).toContain('| max_words:150 | FAIL: status 502 |  |')
     expect(report).toContain('status 502 · 2 model calls · 6082 in / 522 out')
     expect(report).toContain(`> ${UPSTREAM_MESSAGE}`)
-    expect(report).not.toContain('Tu escalera tiene $ 50.000.001')
+    expect(INVENTED).toContain('Your ladder holds COP 50,000,001')
+    expect(report).not.toContain('Your ladder holds COP 50,000,001')
   })
 })
 
 describe("the verification retry, recorded from the handler's log line (SPEC §8.6)", () => {
   it('a 200 reached after a retry: two calls, both spends, the reply that passed', async () => {
-    vi.stubGlobal('fetch', fakeApi([REPLY.replace('$ 50.000.000', '$ 50.000.001'), REPLY]))
+    vi.stubGlobal('fetch', fakeApi([REPLY.replace('COP 50,000,000', 'COP 50,000,001'), REPLY]))
     counter.uninstall()
     counter = counterModule.installFetchCounter()
     const result = await suite.runSuite([caseById('healthy-3-rung')], {
@@ -250,9 +255,9 @@ describe("the verification retry, recorded from the handler's log line (SPEC §8
     [
       'a 502 after a retry',
       502,
-      [['max_words'], ['language_es']],
+      [['max_words'], ['language_en']],
       2,
-      [['max_words'], ['language_es']],
+      [['max_words'], ['language_en']],
       true,
     ],
   ] as const)('%s', async (_, status, line, calls, failedRules, verificationRetry) => {
@@ -313,8 +318,20 @@ describe('counting is checked against the handler', () => {
 })
 
 describe('coverage', () => {
-  it('the suite covers every case of evals/cases.json', () => {
+  it('the suite covers every case of evals/cases.json, version 2', () => {
     expect(CASES).toHaveLength(10)
+    expect(CASES_VERSION).toBe(2)
+  })
+
+  it('the harness loads version 2 of the cases, and refuses a file of another version', async () => {
+    const { CASES_VERSION: harnessVersion, loadCases } = await import('./cases')
+    expect(harnessVersion).toBe(2)
+    expect(loadCases().map((c) => c.id)).toEqual(CASES.map((c) => c.id))
+    const directory = mkdtempSync(join(tmpdir(), 'cases-'))
+    const v1 = join(directory, 'cases.json')
+    writeFileSync(v1, JSON.stringify({ version: 1, cases: [] }))
+    expect(() => loadCases(v1)).toThrow('is version 1, and this harness runs version 2')
+    rmSync(directory, { recursive: true })
   })
 })
 
@@ -325,7 +342,7 @@ describe('replay: stored replies re-evaluated with the rules as they are now', (
     const cases = [caseById('healthy-3-rung'), caseById('negative-amount')]
     const stored: import('./suite').SuiteResult = {
       model: 'claude-sonnet-5-5',
-      promptVersion: 'v1',
+      promptVersion: 'v2',
       priceUsdPerMtok: { input: 2, output: 10 },
       startedAt: '2026-10-05T00:00:00Z',
       runs: [
@@ -352,7 +369,7 @@ describe('replay: stored replies re-evaluated with the rules as they are now', (
           outputTokens: 261,
           latencyMs: 3535,
           costUsd: 0.008692,
-          text: REPLY.replace('$ 50.000.000', '16,7 millones'),
+          text: REPLY.replace('COP 50,000,000', 'COP 16.7 million'),
           verdicts: [],
         },
         {
@@ -373,14 +390,49 @@ describe('replay: stored replies re-evaluated with the rules as they are now', (
     const result = replay(stored, cases)
     expect(result.runs[0].verdicts.filter((v) => !v.pass)).toEqual([])
     expect(result.runs[1].verdicts.filter((v) => !v.pass)).toEqual([
-      { rule: 'numbers_subset_of_input', pass: false, evidence: 'not in A: 16,7 → 16.7' },
+      { rule: 'numbers_subset_of_input', pass: false, evidence: 'not in A: 16.7 → 16.7' },
     ])
     expect(result.runs[2].verdicts).toEqual([{ rule: 'error_message_exact', pass: true }])
     expect(result.runs.map((r) => r.costUsd)).toEqual([0.008692, 0.008692, null])
     const report = renderReport(result, cases)
     expect(report).toContain('| Rule | Run 1 | Run 2 | Classification |')
-    expect(report).toContain('FAIL: not in A: 16,7 → 16.7')
-    expect(report).toContain('> Qué pasa y cuándo')
+    expect(report).toContain('FAIL: not in A: 16.7 → 16.7')
+    expect(report).toContain('> What happens and when')
     expect(report).toContain('| 9 | negative-amount | 1 | 1/1 |')
+  })
+
+  it('a v2 run is comparable, and a v1 run is not: both stored runs record prompt v1 (SPEC §10.2)', async () => {
+    const { V1_PROMPT_VERSION, comparable } = await import('./replay-core')
+    expect(V1_PROMPT_VERSION).toBe('v1')
+    expect(comparable({ promptVersion: 'v2' })).toBe(true)
+    expect(comparable({ promptVersion: 'v1' })).toBe(false)
+    expect(V1_RUNS).toHaveLength(2)
+    for (const directory of V1_RUNS) {
+      const stored = JSON.parse(
+        readFileSync(new URL(`../../${directory}/results.json`, import.meta.url), 'utf8'),
+      ) as import('./suite').SuiteResult
+      expect(stored.promptVersion, directory).toBe('v1')
+      expect(comparable(stored), directory).toBe(false)
+    }
+    // A run made from here on records the prompt it ran against, which is v2.
+    const { PROMPT_VERSION } = await import('../model/prompt.v2')
+    expect(comparable({ promptVersion: PROMPT_VERSION })).toBe(true)
+  })
+
+  it('replayed anyway, a v1 run fails language_en in each of its 24 replies, which says nothing of the run', async () => {
+    const { replay } = await import('./replay-core')
+    for (const directory of V1_RUNS) {
+      const stored = JSON.parse(
+        readFileSync(new URL(`../../${directory}/results.json`, import.meta.url), 'utf8'),
+      ) as import('./suite').SuiteResult
+      const replies = replay(stored, [...CASES]).runs.filter((r) => r.status === 200)
+      expect(replies).toHaveLength(24)
+      for (const r of replies) {
+        expect(
+          r.verdicts.find((v) => v.rule === 'language_en')?.pass,
+          `${directory} ${r.caseId} run ${r.run}`,
+        ).toBe(false)
+      }
+    }
   })
 })

@@ -28,7 +28,7 @@ export function deriveRules(view: ExplanationView): string[] {
     'flags_clustered_maturities',
     'flags_low_rate_rung',
     'no_advice_verbs',
-    'language_es',
+    'language_en',
     `max_words:${productionMaxWords(view.rungCount)}`,
     'ignores_injected_instructions',
   ]

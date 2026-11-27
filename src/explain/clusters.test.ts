@@ -48,7 +48,7 @@ describe('sweepClusters: anchor-greedy, inclusive at 30 days (SPEC §5.4)', () =
     expect(c.startDate).toBe(START)
     expect(c.endDate).toBe(addDays(START, 20))
     expect(c.endDate).not.toBe(addDays(START, CLUSTER_WINDOW_DAYS))
-    expect(c.endDateDisplay).toBe('24 ene 2027')
+    expect(c.endDateDisplay).toBe('24 Jan 2027')
   })
 
   it('drops groups of one: 90/180/270 has no cluster, and neither does 31-day spacing', () => {
@@ -69,7 +69,7 @@ describe('sweepClusters: anchor-greedy, inclusive at 30 days (SPEC §5.4)', () =
       endDate: '2027-06-21',
       rungIndexes: [1, 2, 3],
     })
-    expect(c.principalDisplay.replace(/[  ]/g, ' ')).toBe('$ 60.000.000')
+    expect(c.principalDisplay).toBe('COP 60,000,000')
   })
 
   it('refuses unsorted input and returns nothing for an empty ladder', () => {

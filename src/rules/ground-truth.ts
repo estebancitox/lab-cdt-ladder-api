@@ -1,57 +1,76 @@
-import { MONTHS_ES, parseISODate, type ISODate } from '../engine'
+import { MONTHS_SHORT, parseISODate, type ISODate } from '../engine'
 import type { ExplanationView } from '../explain'
 import type { ExplainRequest } from '../request/schema'
-import { fold } from './normalize'
 import type { GroundTruth, RungTruth } from './types'
 
 /**
- * The full month names behind the renderings of SPEC §11.3 step 2. Kept here rather than
- * imported from the prompt layer so the harness does not share a table with what it measures;
- * ground-truth.test.ts checks the two agree.
+ * The whole month names of SPEC §3.4, behind the long date and the two renderings that lack a
+ * day or a year. Kept here rather than imported from the prompt layer so the harness does not
+ * share a table with what it measures; ground-truth.test.ts checks the two agree.
  */
 export const FULL_MONTHS = [
-  'enero',
-  'febrero',
-  'marzo',
-  'abril',
-  'mayo',
-  'junio',
-  'julio',
-  'agosto',
-  'septiembre',
-  'octubre',
-  'noviembre',
-  'diciembre',
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
 ] as const
 
 /**
- * SPEC §11.3 step 2: the seven renderings of one date, lowercased and accent-folded.
- * `2027-06-01`, `1 jun 2027`, `1 de junio de 2027`, `1 de jun de 2027`, `1 de junio`,
- * `junio de 2027`, `junio 2027`.
+ * SPEC §3.4: the full dates of one date, each naming one day: ISO, short and long, as written.
+ * `2027-06-01`, `1 Jun 2027`, `1 June 2027`. In May the short and the long form are one string.
  */
-export function dateRenderings(date: ISODate): string[] {
+export function fullDates(date: ISODate): string[] {
   const { y, m, d } = parseISODate(date)
-  const short = MONTHS_ES[m - 1]
-  const long = FULL_MONTHS[m - 1]
   return [
-    date,
-    `${d} ${short} ${y}`,
-    `${d} de ${long} de ${y}`,
-    `${d} de ${short} de ${y}`,
-    `${d} de ${long}`,
-    `${long} de ${y}`,
-    `${long} ${y}`,
-  ].map(fold)
+    ...new Set([date, `${d} ${MONTHS_SHORT[m - 1]} ${y}`, `${d} ${FULL_MONTHS[m - 1]} ${y}`]),
+  ]
 }
 
 /**
- * SPEC §11.3 step 1: the number inside a display string. Extract `\d[\d.]*(,\d+)?`, delete
- * `.`, replace `,` with `.`, parse. `$ 1.234.567` → 1234567, `13,5%` → 13.5.
+ * SPEC §3.4 and §11.3 step 2: the five renderings of one date, as written: the three full
+ * dates, then `1 June` and `June 2027`. Nothing is folded: a rendering is compared
+ * case-sensitively.
+ */
+export function dateRenderings(date: ISODate): string[] {
+  const { y, m, d } = parseISODate(date)
+  const long = FULL_MONTHS[m - 1]
+  return [...fullDates(date), `${d} ${long}`, `${long} ${y}`]
+}
+
+/**
+ * SPEC §3.4, the grammar of figures, step 1: a numeric run is a maximal match of digits, with a
+ * `.` or a `,` taken into the run only where a digit stands on both sides of it.
+ */
+export const NUMERIC_RUN = /\d+(?:[.,]\d+)*/g
+/** SPEC §3.4 step 2: a run is well formed when the whole of it matches `number`. */
+export const WELL_FORMED_RUN = /^(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$/
+
+/**
+ * SPEC §3.4 steps 2 and 3: the value of a run, every `,` deleted and the rest read as a decimal,
+ * or null when the run is not well formed. There is no second reading.
+ */
+export function valueOfRun(run: string): number | null {
+  return WELL_FORMED_RUN.test(run) ? Number(run.replace(/,/g, '')) : null
+}
+
+/**
+ * SPEC §11.3 step 1: the number inside a display string, read with the grammar of §3.4. A
+ * display string holds exactly one numeric run. `COP 1,234,567` → 1234567, `13.5%` → 13.5.
  */
 export function numberOfDisplay(display: string): number {
-  const match = /\d[\d.]*(,\d+)?/.exec(display)
-  if (!match) throw new Error(`no number in display string: ${display}`)
-  return Number(match[0].replace(/\./g, '').replace(',', '.'))
+  const runs = display.match(NUMERIC_RUN) ?? []
+  if (runs.length !== 1) throw new Error(`not exactly one number in display string: ${display}`)
+  const value = valueOfRun(runs[0])
+  if (value === null) throw new Error(`malformed number in display string: ${display}`)
+  return value
 }
 
 /**
@@ -106,7 +125,7 @@ export function groundTruthFrom(request: ExplainRequest, view: ExplanationView):
   const rungs: RungTruth[] = view.perRung.map((r) => ({
     index: r.index,
     maturityDate: r.maturityDate,
-    renderings: dateRenderings(r.maturityDate),
+    fullDates: fullDates(r.maturityDate),
   }))
 
   return {

@@ -9,17 +9,18 @@ import {
   callDeadlineMs,
   retryFits,
 } from './budget'
-import { addDays, validateScenario, type ScenarioInput } from './engine'
+import { addDays, formatCOP, formatPercent, validateScenario, type ScenarioInput } from './engine'
 import { buildExplanationView } from './explain'
 import type { FunctionUrlEvent } from './handler'
 import { LIMITS_TIMEOUT_MS } from './limits'
 import { KEY_FETCH_TIMEOUT_MS } from './model/api-key'
 import { CLIENT_OPTIONS, MAX_RETRIES, MAX_TOKENS, MODEL, MODEL_DEADLINE_MS } from './model/call'
 import { buildModelPayload } from './model/payload'
-import { SYSTEM_PROMPT_V1 } from './model/prompt.v1'
+import { SYSTEM_PROMPT_V2 } from './model/prompt.v2'
 import { ERROR_MESSAGE } from './request/errors'
 import { MAX_BODY_BYTES, MAX_RUNG_DAYS, validateRequest } from './request/validate'
 import { LIMIT_MESSAGE, UPSTREAM_MESSAGE } from './response'
+import { constructedReply } from './test-support/constructed-replies'
 import {
   SPEC_MD,
   STORED_RUNS,
@@ -31,7 +32,6 @@ import {
   specJsonBlockAfter,
   specRuleNames,
   specTableRows,
-  storedReply,
   type RawRequest,
 } from './test-support/contract'
 
@@ -87,12 +87,12 @@ vi.mock('@aws-sdk/client-dynamodb', () => ({
 const PARAMETER = '/lab-cdt-ladder-api/anthropic-api-key'
 /**
  * A reply that fails the derived set of case 1 (SPEC §11.12): it names no rung date and no
- * entity and has too few Spanish words. Used where no reply is verified and as a failing reply.
+ * entity and has too few English words. Used where no reply is verified and as a failing reply.
  */
 const REPLY =
-  'Qué pasa y cuándo\n\nTu escalera tiene 3 peldaños.\n\nRiesgos\n\nSin riesgos para señalar con estos datos.'
-/** A reply of the stored v1 run for case 1, which passes its derived set. */
-const PASSING = storedReply('healthy-3-rung')
+  'What happens and when\n\nThere are 3 rungs.\n\nRisks\n\nNo risks to flag with this data.'
+/** The constructed reply of case 1 (SPEC §10.2), which passes its derived set. */
+const PASSING = constructedReply('healthy-3-rung')
 const USAGE = { input_tokens: 1742, output_tokens: 251 }
 
 let handler: typeof import('./handler').handler
@@ -291,7 +291,7 @@ describe('200: the explanation (SPEC §7.1)', () => {
     expect(JSON.parse(response.body)).toEqual({ text: PASSING })
   })
 
-  it('sends one request: the model, max_tokens 600, thinking off, prompt v1, the payload as JSON', async () => {
+  it('sends one request: the model, max_tokens 600, thinking off, prompt v2, the payload as JSON', async () => {
     mocks.create.mockResolvedValue(reply(PASSING))
     await handler(post(CASE_1))
     expect(mocks.create).toHaveBeenCalledTimes(1)
@@ -304,7 +304,7 @@ describe('200: the explanation (SPEC §7.1)', () => {
       model: 'claude-sonnet-5-5',
       max_tokens: 600,
       thinking: { type: 'between_tools' },
-      system: SYSTEM_PROMPT_V1,
+      system: SYSTEM_PROMPT_V2,
       messages: [{ role: 'user', content: JSON.stringify(payload) }],
     })
     expect(Object.keys(options).sort()).toEqual(['maxRetries', 'signal', 'timeout'])
@@ -372,7 +372,7 @@ describe('200: the explanation (SPEC §7.1)', () => {
   })
 
   it.each([...VALID_CASES])('$id is explained', async (c) => {
-    mocks.create.mockResolvedValue(reply(storedReply(c.id)))
+    mocks.create.mockResolvedValue(reply(constructedReply(c.id)))
     const response = await handler(post(bodyOf(c)))
     expect(response.statusCode).toBe(200)
     expect(mocks.create).toHaveBeenCalledTimes(1)
@@ -394,7 +394,17 @@ describe('200: the explanation (SPEC §7.1)', () => {
     )
     expect(mocks.create).toHaveBeenCalledTimes(2)
     expect(fromSigned).toBe(fromUnsigned)
-    expect(fromSigned).not.toMatch(/-\$|"-0/)
+    // The guard reads the sign as the engine prints it (SPEC §3.4): before the code, or before a
+    // digit. Read as written, the two fields would have reached the model in these two forms.
+    const signedFigure = /-COP|-\d/
+    expect(formatCOP(-0)).toBe('-COP 0')
+    expect(formatPercent(-0)).toBe('-0%')
+    expect(formatCOP(-0)).toMatch(signedFigure)
+    expect(formatPercent(-0)).toMatch(signedFigure)
+    expect(fromSigned).not.toMatch(signedFigure)
+    // Both figures are in the payload, unsigned: a zero ceiling selects the ceiling risk.
+    expect(fromSigned).toContain('"insuranceCeiling":"COP 0"')
+    expect(fromSigned).toContain('"rateEA":"0%"')
   })
 
   it('decodes a base64 body before measuring, hashing and validating it', async () => {
@@ -986,7 +996,7 @@ describe('row 9: model unavailable, overloaded or timed out → 503 upstream_una
       'model_context_window_exceeded',
     ]) {
       written = []
-      const partial = `Qué pasa y cuándo\n\nMARKER partial text under ${stopReason}`
+      const partial = `What happens and when\n\nMARKER partial text under ${stopReason}`
       mocks.create.mockResolvedValue(
         reply(partial, stopReason, { input_tokens: 1742, output_tokens: 40 }),
       )
@@ -1012,7 +1022,7 @@ describe('row 9: model unavailable, overloaded or timed out → 503 upstream_una
 
 describe('row 10: model response truncated at max_tokens → 503 upstream_truncated', () => {
   it('returns the fixed string, never the partial text, and logs the tokens that were spent', async () => {
-    const partial = 'Qué pasa y cuándo\n\nTu escalera tiene 3 peldaños que vencen el'
+    const partial = 'What happens and when\n\nYour ladder has 3 rungs that mature on'
     mocks.create.mockResolvedValue(
       reply(partial, 'max_tokens', { input_tokens: 1742, output_tokens: 600 }),
     )
@@ -1024,7 +1034,7 @@ describe('row 10: model response truncated at max_tokens → 503 upstream_trunca
       text: UPSTREAM_MESSAGE,
       error: { code: 'upstream_truncated', issues: [] },
     })
-    expect(response.body).not.toContain('Tu escalera')
+    expect(response.body).not.toContain('Your ladder')
     const line = logLine()
     expect(Object.keys(line)).toEqual([...BASE_KEYS, ...TOKEN_KEYS, 'upstreamError'])
     expect(line).toMatchObject({
@@ -1038,7 +1048,7 @@ describe('row 10: model response truncated at max_tokens → 503 upstream_trunca
 
 describe('row 11: model reply failed verification → 502 verification_failed (SPEC §7.4)', () => {
   /** What case 1's derived set fails REPLY on, distinct names in §11.12 order (measured). */
-  const REPLY_FAILS = ['mentions_every_rung', 'mentions_entity', 'language_es']
+  const REPLY_FAILS = ['mentions_every_rung', 'mentions_entity', 'language_en']
   const failureBody = (rules: string[]) => ({
     text: UPSTREAM_MESSAGE,
     error: {
@@ -1069,7 +1079,8 @@ describe('row 11: model reply failed verification → 502 verification_failed (S
   })
 
   it('a retry that fails too ends in 502 with the names of the reply last evaluated', async () => {
-    const invented = PASSING.replace('$ 50.000.000', '$ 50.000.001')
+    const invented = PASSING.replace('COP 50,000,000', 'COP 50,000,001')
+    expect(invented).not.toBe(PASSING)
     mocks.create
       .mockResolvedValueOnce(reply(REPLY))
       .mockResolvedValueOnce(reply(invented, 'end_turn', RETRY_USAGE))
@@ -1080,7 +1091,8 @@ describe('row 11: model reply failed verification → 502 verification_failed (S
     expectBytes(body.text, 'UPSTREAM_MESSAGE')
     expect(body).toEqual(failureBody(['numbers_subset_of_input']))
     // A reply that failed is never returned, not in part.
-    expect(response.body).not.toContain('Tu escalera')
+    expect(response.body).not.toContain('Your ladder')
+    expect(response.body).not.toContain('There are 3 rungs')
     const line = logLine()
     expect(Object.keys(line)).toEqual([...BASE_KEYS, ...TOKEN_KEYS, 'failedRules'])
     expect(line).toMatchObject({
@@ -1089,7 +1101,8 @@ describe('row 11: model reply failed verification → 502 verification_failed (S
       outputTokens: 251 + 300,
       failedRules: [REPLY_FAILS, ['numbers_subset_of_input']],
     })
-    expect(written.join('')).not.toContain('Tu escalera')
+    expect(written.join('')).not.toContain('Your ladder')
+    expect(written.join('')).not.toContain('There are 3 rungs')
   })
 
   it('one issue per distinct name: three failed mentions_entity rules are one issue, with no name', async () => {
@@ -1105,8 +1118,8 @@ describe('row 11: model reply failed verification → 502 verification_failed (S
   })
 
   it('the body equals the SPEC §7.1 verification block for the same two failed rules', async () => {
-    // Over the 150-word budget, with an English decimal: exactly the SPEC example's two rules.
-    const long = `${PASSING}\n\n${'palabra '.repeat(150)}1.5.`
+    // Over the 150-word budget, with a Spanish decimal: exactly the SPEC example's two rules.
+    const long = `${PASSING}\n\n${'word '.repeat(150)}13,5%`
     mocks.create.mockResolvedValue(reply(long))
     const response = await handler(post(CASE_1))
     expect(response.statusCode).toBe(502)
@@ -1142,7 +1155,7 @@ describe('row 11: model reply failed verification → 502 verification_failed (S
     mocks.create
       .mockResolvedValueOnce(reply(REPLY))
       .mockResolvedValueOnce(
-        reply('Qué pasa', 'max_tokens', { input_tokens: 1742, output_tokens: 600 }),
+        reply('What happens', 'max_tokens', { input_tokens: 1742, output_tokens: 600 }),
       )
     const truncated = await handler(post(CASE_1))
     expect(JSON.parse(truncated.body).error).toEqual({ code: 'upstream_truncated', issues: [] })
@@ -1195,7 +1208,11 @@ describe('row 11: model reply failed verification → 502 verification_failed (S
     const input = inputOf('healthy-3-rung')
     input.ladder.entities[0].name = 'Banco'
     input.ladder.entities[2].name = 'BANCO'
-    mocks.create.mockResolvedValue(reply(PASSING))
+    // The reply writes one spelling for both, and never the other.
+    const namesOne = PASSING.replace('Banco Andino', 'Banco').replace('Entidad B', 'Banco')
+    expect(namesOne.match(/Banco/g)).toHaveLength(2)
+    expect(namesOne).not.toContain('BANCO')
+    mocks.create.mockResolvedValue(reply(namesOne))
     const response = await handler(post(JSON.stringify(input)))
     expect(response.statusCode).toBe(200)
     expect(mocks.create).toHaveBeenCalledTimes(1)
@@ -1351,7 +1368,7 @@ describe('the log line (SPEC §8.4)', () => {
   })
 
   it('counts rungs and entities as the request lists them', async () => {
-    mocks.create.mockResolvedValue(reply(storedReply('twelve-rungs')))
+    mocks.create.mockResolvedValue(reply(constructedReply('twelve-rungs')))
     await handler(post(bodyOf(caseById('twelve-rungs'))))
     expect(logLine()).toMatchObject({ rungCount: 12, entityCount: 6 })
   })
@@ -1361,9 +1378,9 @@ describe('the log line (SPEC §8.4)', () => {
     async (c) => {
       const input = c.input as RawRequest
       // The first reply, the entity names and little else, fails verification; the retry is the
-      // case's stored reply, which passes. So the line is a 200 after a retry.
-      const namesOnly = `Qué pasa y cuándo\n\n${input.ladder.entities.map((e) => e.name).join(', ')}.\n\nRiesgos\n\nSin riesgos para señalar con estos datos.`
-      const passing = storedReply(c.id)
+      // case's constructed reply, which passes. So the line is a 200 after a retry.
+      const namesOnly = `What happens and when\n\n${input.ladder.entities.map((e) => e.name).join(', ')}.\n\nRisks\n\nNo risks to flag with this data.`
+      const passing = constructedReply(c.id)
       mocks.create.mockResolvedValueOnce(reply(namesOnly)).mockResolvedValueOnce(reply(passing))
       const response = await handler(post(bodyOf(c)))
       expect(response.statusCode).toBe(200)
@@ -1371,7 +1388,7 @@ describe('the log line (SPEC §8.4)', () => {
       const line = written.join('')
       for (const entity of input.ladder.entities) expect(line).not.toContain(entity.name)
       for (const rung of input.ladder.rungs) expect(line).not.toContain(String(rung.principal))
-      for (const fragment of ['Qué pasa', 'Riesgos', 'Sin riesgos', input.asOfDate]) {
+      for (const fragment of ['What happens', 'Risks', 'No risks', input.asOfDate]) {
         expect(line).not.toContain(fragment)
       }
       // Every value is an id, a hash, a number or null, or the §8.4 verification entries: rule

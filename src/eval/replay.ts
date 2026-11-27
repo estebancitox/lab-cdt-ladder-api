@@ -1,13 +1,17 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { loadCases } from './cases'
 import { renderReport } from './report'
-import { replay } from './replay-core'
-import type { EvalCase, SuiteResult } from './suite'
+import { comparable, replay } from './replay-core'
+import type { SuiteResult } from './suite'
 
 /**
  * Re-evaluates the replies of a stored run with the rules as they are now, without paying:
  *   npm run eval:replay -- evals/runs/<timestamp>/results.json
  * Writes report.replay.md beside the results. The measurement itself is never rewritten.
+ *
+ * A v1 run is not replayed (SPEC §10.2): the command says it is not comparable, writes nothing
+ * and exits 3. Exit 2 is a usage error and 1 any other failure.
  */
 function main(): number {
   const path = process.argv[2]
@@ -16,7 +20,13 @@ function main(): number {
     return 2
   }
   const stored = JSON.parse(readFileSync(path, 'utf8')) as SuiteResult
-  const { cases } = JSON.parse(readFileSync('evals/cases.json', 'utf8')) as { cases: EvalCase[] }
+  if (!comparable(stored)) {
+    console.error(
+      `not comparable: ${path} is a v1 run, Spanish replies under prompt ${stored.promptVersion}, judged by the v1 rules (SPEC §10.2). Its verdicts are in the report.md beside it. Nothing was written.`,
+    )
+    return 3
+  }
+  const cases = loadCases()
   const report = renderReport(replay(stored, cases), cases)
   const out = join(dirname(path), 'report.replay.md')
   writeFileSync(out, report)

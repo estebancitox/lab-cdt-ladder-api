@@ -1,7 +1,7 @@
 import { buildExplanationView } from '../explain'
 import { handler as realHandler, type FunctionUrlEvent, type LambdaContext } from '../handler'
 import { MODEL } from '../model/call'
-import { PROMPT_VERSION } from '../model/prompt.v1'
+import { PROMPT_VERSION } from '../model/prompt.v2'
 import { validateRequest } from '../request/validate'
 import type { HttpResponse } from '../response'
 import { evaluate, evaluateRefusal, groundTruthFrom, type Verdict } from '../rules'

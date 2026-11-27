@@ -10,7 +10,7 @@ export type ISODate = string
 export type DayCountBase = 360 | 365
 
 export interface FiscalParams {
-  /** Retención en la fuente on interest, as a fraction (0.04 = 4 %). User-supplied, never current truth. */
+  /** Withholding tax on interest, as a fraction (0.04 = 4%). User-supplied, never current truth. */
   retencionRate: number
   /** Deposit-insurance ceiling per entity, integer COP. User-supplied, never current truth. */
   insuranceCeiling: number
@@ -27,7 +27,7 @@ export interface RungInput {
   principal: number
   /** Term in days, integer > 0. */
   days: number
-  /** Effective annual rate as a fraction (0.135 = 13,5 % E.A.). */
+  /** Effective annual rate as a fraction (0.135 = 13.5% E.A.). */
   ea: number
   entityId: string
 }
@@ -109,7 +109,7 @@ export interface EntityExposure {
    * the most the insurance would ever have had to cover.
    */
   interest: number
-  /** principal + interest; net-of-retención would understate exposure. */
+  /** principal + interest; netting out withholding tax would understate exposure. */
   exposure: number
   ceiling: number
   /** Strictly above the ceiling; exactly-at-ceiling is compliant. */

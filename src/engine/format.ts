@@ -2,20 +2,21 @@ import { parseISODate } from './dates'
 import type { ISODate } from './types'
 
 /**
- * One-way formatters: the engine speaks numbers, nothing parses display strings
- * back (the es-CO thousands separator is the JS decimal point — round-tripping
- * silently divides by ~10^6).
+ * One-way formatters: the engine speaks numbers and never parses a display
+ * string back ('COP 40,000,000' is not a number, and parseFloat('40,000,000')
+ * stops at the first comma and returns 40).
  */
 
-const copFormatter = new Intl.NumberFormat('es-CO', {
-  style: 'currency',
-  currency: 'COP',
-  minimumFractionDigits: 0,
-  maximumFractionDigits: 0,
-})
+const integerFormatter = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 })
 
+/**
+ * 40000000 → 'COP 40,000,000'. The code, the plain space (U+0020) and the sign
+ * position are literals here, so ICU supplies only the digits, the commas and
+ * the minus: the same characters in every runtime.
+ */
 export function formatCOP(x: number): string {
-  return copFormatter.format(x)
+  const digits = integerFormatter.format(x)
+  return digits.startsWith('-') ? `-COP ${digits.slice(1)}` : `COP ${digits}`
 }
 
 const percentFormatters = new Map<number, Intl.NumberFormat>()
@@ -23,7 +24,7 @@ const percentFormatters = new Map<number, Intl.NumberFormat>()
 export function formatPercent(fraction: number, maxDecimals = 2): string {
   let f = percentFormatters.get(maxDecimals)
   if (!f) {
-    f = new Intl.NumberFormat('es-CO', {
+    f = new Intl.NumberFormat('en-US', {
       style: 'percent',
       minimumFractionDigits: 0,
       maximumFractionDigits: maxDecimals,
@@ -33,13 +34,13 @@ export function formatPercent(fraction: number, maxDecimals = 2): string {
   return f.format(fraction)
 }
 
-export const MONTHS_ES = [
-  'ene', 'feb', 'mar', 'abr', 'may', 'jun',
-  'jul', 'ago', 'sep', 'oct', 'nov', 'dic',
+export const MONTHS_SHORT = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
 ] as const
 
-/** '2027-03-12' → '12 mar 2027'. Hand-rolled: deterministic across ICU versions. */
+/** '2027-03-12' → '12 Mar 2027'. Hand-rolled: deterministic across ICU versions. */
 export function formatDateShort(date: ISODate): string {
   const { y, m, d } = parseISODate(date)
-  return `${d} ${MONTHS_ES[m - 1]} ${y}`
+  return `${d} ${MONTHS_SHORT[m - 1]} ${y}`
 }

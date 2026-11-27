@@ -35,6 +35,8 @@ const suite = JSON.parse(readFileSync(new URL('evals/cases.json', ROOT), 'utf8')
   cases: EvalCase[]
 }
 
+/** SPEC §10: the cases file in force is version 2. */
+export const CASES_VERSION: number = suite.version
 export const CASES: readonly EvalCase[] = suite.cases
 export const VALID_CASES: readonly EvalCase[] = CASES.filter(
   (c) => !c.rules.includes('error_message_exact'),
@@ -82,11 +84,43 @@ export function specJsonBlockAfter(heading: string): string {
   return SPEC_MD.slice(start, end)
 }
 
+/** The text of SPEC.md from the first occurrence of `from` up to the next occurrence of `to`. */
+export function specSection(from: string, to: string): string {
+  const start = SPEC_MD.indexOf(from)
+  const end = SPEC_MD.indexOf(to, start)
+  if (start < 0 || end < 0) throw new Error(`SPEC.md section not found: ${from}`)
+  return SPEC_MD.slice(start, end)
+}
+
+/** The fenced blocks of a piece of SPEC.md, without their fences and without indentation. */
+export function fencedBlocks(section: string): string[] {
+  return [...section.matchAll(/^( *)```[a-z]*\n([\s\S]*?)\n\1```$/gm)].map(([, indent, body]) =>
+    body
+      .split('\n')
+      .map((line) => (line.startsWith(indent) ? line.slice(indent.length) : line))
+      .join('\n'),
+  )
+}
+
+/** A constructed reply of SPEC §10.2, Example 1 (case 2) or Example 2 (case 10), as written. */
+export function specExample(n: 1 | 2): string {
+  const at = SPEC_MD.indexOf(`Example ${n}, for case `)
+  if (at < 0) throw new Error(`Example ${n} not found in SPEC.md §10.2`)
+  const [block] = fencedBlocks(SPEC_MD.slice(at))
+  if (block === undefined) throw new Error(`no fenced block after Example ${n}`)
+  return block
+}
+
 /** The body rows of the SPEC.md table under `header`, up to the first blank line, as cells. */
 export function specTableRows(header: string): string[][] {
-  const at = SPEC_MD.indexOf(`${header}\n`)
+  return tableRows(SPEC_MD, header)
+}
+
+/** The same for a piece of SPEC.md, where two sections head a table alike. */
+export function tableRows(text: string, header: string): string[][] {
+  const at = text.indexOf(`${header}\n`)
   if (at < 0) throw new Error(`table not found in SPEC.md: ${header}`)
-  const lines = SPEC_MD.slice(at).split('\n')
+  const lines = text.slice(at).split('\n')
   return lines.slice(2, lines.indexOf('')).map((line) =>
     line
       .split('|')
@@ -109,8 +143,15 @@ export function specErrorMessage(): string {
   return m[1]
 }
 
-/** The stored v1 run (SPEC §8.6), read-only: the source of replies known to pass verification. */
+/**
+ * The stored run of SPEC §8.6, read-only: the v1 run of 2026-10-06. It is a dated record of the
+ * Spanish system and no longer a source of replies known to pass verification (§10.2). It
+ * remains the source of what does not depend on the language of the rules: the latencies R is
+ * computed from.
+ */
 export const STORED_RUN = 'evals/runs/2026-10-06T19-50-56Z'
+/** Both v1 runs under evals/runs/, in date order: 24 Spanish replies each. */
+export const V1_RUNS = [STORED_RUN, 'evals/runs/2026-10-29T23-18-30Z'] as const
 
 export interface StoredRun {
   caseId: string
@@ -123,20 +164,23 @@ export interface StoredRun {
   text: string | null
 }
 
-export const STORED_RUNS: readonly StoredRun[] = (
-  JSON.parse(readFileSync(new URL(`${STORED_RUN}/results.json`, ROOT), 'utf8')) as {
-    runs: StoredRun[]
-  }
-).runs
-
-/** The reply the stored run holds for a valid case, run 1 by default. */
-export function storedReply(caseId: string, run = 1): string {
-  const found = STORED_RUNS.find((r) => r.caseId === caseId && r.run === run)
-  if (!found || found.status !== 200 || found.text === null) {
-    throw new Error(`no stored reply for ${caseId} run ${run} in ${STORED_RUN}`)
-  }
-  return found.text
+function runsOf(directory: string): StoredRun[] {
+  return (
+    JSON.parse(readFileSync(new URL(`${directory}/results.json`, ROOT), 'utf8')) as {
+      runs: StoredRun[]
+    }
+  ).runs
 }
+
+export const STORED_RUNS: readonly StoredRun[] = runsOf(STORED_RUN)
+
+/** The 48 stored replies of v1 (SPEC §10.2), each with the run it comes from. */
+export const V1_REPLIES: readonly { directory: string; caseId: string; run: number; text: string }[] =
+  V1_RUNS.flatMap((directory) =>
+    runsOf(directory)
+      .filter((r) => r.status === 200 && r.text !== null)
+      .map((r) => ({ directory, caseId: r.caseId, run: r.run, text: r.text as string })),
+  )
 
 /** The engine commit SPEC.md pins in its header. */
 export function specEnginePin(): string {

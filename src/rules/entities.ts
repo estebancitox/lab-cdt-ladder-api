@@ -8,14 +8,15 @@ export interface EntitySpan {
 }
 
 /** SPEC §11.2 step 4: what every recorded span becomes in the masked text. */
-export const MASK = '«ENTIDAD»'
+export const MASK = '«INSTITUTION»'
 
 /**
  * SPEC §11.2 steps 1 and 2: every normalized name is searched in the normalized text under
  * `toLocaleLowerCase('es')`, longest name first so a short name that is a prefix of a longer
  * one does not steal the span. Length is UTF-16 code units after N, and names of equal length
- * keep the request's order, which the stable sort preserves. A match that overlaps a span
- * already recorded is skipped. The result maps each raw entity name to its spans, possibly none.
+ * keep the request's order, which the stable sort preserves. A match stands only as a whole
+ * unit (standsAsWholeUnit), and one that overlaps a span already recorded is skipped. The
+ * result maps each raw entity name to its spans, possibly none.
  */
 export function entitySpans(
   normalizedText: string,
@@ -35,6 +36,7 @@ export function entitySpans(
       const start = offsets[at]
       const end = offsets[at + needle.length]
       from = at + 1
+      if (!standsAsWholeUnit(normalizedText, start, end)) continue
       if (taken.some(([s, e]) => start < e && s < end)) continue
       taken.push([start, end])
       spans.get(name)?.push({ entity: name, start, end })
@@ -44,9 +46,36 @@ export function entitySpans(
 }
 
 /**
+ * SPEC §11.2 step 2: a letter or a decimal digit, the Unicode general categories L and Nd. Both
+ * patterns are sticky and in Unicode mode, so each is tried at one offset and reads one whole
+ * code point there, a surrogate pair included: the first the code point that begins at the
+ * offset, the second the one that ends at it.
+ */
+const LETTER_OR_DIGIT_AT = /[\p{L}\p{Nd}]/uy
+const LETTER_OR_DIGIT_BEFORE = /(?<=[\p{L}\p{Nd}])/uy
+
+/**
+ * SPEC §11.2 step 2: whether the match at [start, end) of the normalized text stands as a whole
+ * unit. The code point immediately before the match and the code point immediately after it,
+ * where there is one, must not be a letter or a decimal digit. So the start and the end of the
+ * text, a space, a line break and any punctuation mark let a match stand, and so do a combining
+ * mark and U+200C, which are neither (§12). `text` is the normalized reply as written, not
+ * lowered, and `start` and `end` are UTF-16 offsets into it, each at a code point boundary.
+ */
+export function standsAsWholeUnit(text: string, start: number, end: number): boolean {
+  return !matchesAt(LETTER_OR_DIGIT_BEFORE, text, start) && !matchesAt(LETTER_OR_DIGIT_AT, text, end)
+}
+
+/** Whether a sticky pattern matches at exactly `index`. Nothing stands before 0 or at the end. */
+function matchesAt(sticky: RegExp, text: string, index: number): boolean {
+  sticky.lastIndex = index
+  return sticky.test(text)
+}
+
+/**
  * SPEC §11.2 step 3 (§11.5): at least one span was recorded for the entity, or for another whose
  * normalized name compares equal to its own under `toLocaleLowerCase('es')`. Such names cannot be
- * told apart by a substring, so the span recorded under the one searched first credits both.
+ * told apart by their text, so the span recorded under the one searched first credits both.
  */
 export function mentionsEntity(spans: Map<string, EntitySpan[]>, name: string): boolean {
   const key = searchKey(name)

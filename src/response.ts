@@ -6,14 +6,14 @@ import { ERROR_MESSAGE, type ErrorCode, type Issue } from './request/errors'
  * handler.test.ts compares it to the line parsed out of SPEC.md rather than to a retyped copy.
  */
 export const UPSTREAM_MESSAGE =
-  'No puedo explicar esta escalera en este momento: el servicio no está disponible.'
+  'I cannot explain this ladder right now: the service is unavailable.'
 
 /**
  * Fixed string of SPEC §7 for a 429: a §8.2 daily cap refused the request before the key read and
  * the model call. Byte-exact against the SPEC, checked the same way.
  */
 export const LIMIT_MESSAGE =
-  'No puedo explicar esta escalera por ahora: se alcanzó el límite diario de solicitudes.'
+  'I cannot explain this ladder for now: the daily request limit has been reached.'
 
 /** SPEC §7: the codes that exist only once validation has passed. */
 export type ServiceCode = 'upstream_unavailable' | 'upstream_truncated' | 'internal_error'

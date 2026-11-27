@@ -4,184 +4,189 @@ import type { ExplainRequest } from '../request/schema'
 
 /** SPEC §4: the closed label vocabulary, one label per risk of the view. */
 export const RISK_LABELS: Record<RiskKey, string> = {
-  ceiling: 'Tope del seguro',
-  concentration: 'Concentración',
-  clustered: 'Vencimientos agrupados',
-  rateGap: 'Diferencia de tasa',
+  ceiling: 'Deposit-insurance ceiling',
+  concentration: 'Concentration',
+  clustered: 'Clustered maturities',
+  rateGap: 'Rate difference',
 }
 
+/** SPEC §3.4: the twelve whole month names. Each begins with the engine's three letters. */
 export const MONTH_NAMES = [
-  'enero',
-  'febrero',
-  'marzo',
-  'abril',
-  'mayo',
-  'junio',
-  'julio',
-  'agosto',
-  'septiembre',
-  'octubre',
-  'noviembre',
-  'diciembre',
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
 ] as const
 
 /**
- * '2027-06-01' → '1 de junio de 2027': the long rendering SPEC §11.3 generates for every date
- * of the view. The engine's formatDateShort abbreviates the month, and the model is handed the
- * form a reader expects so that it copies a date instead of expanding one. Calendar validity is
- * still the engine's: parseISODate throws on anything that is not a real date.
+ * '2027-06-01' → '1 June 2027': the long date of SPEC §3.4, the form the payload carries. The
+ * engine has no long form, and the model is handed the form a reader expects so that it copies a
+ * date instead of expanding or reordering one. Calendar validity is still the engine's:
+ * parseISODate throws on anything that is not a real date.
  */
 export function formatDateLong(date: ISODate): string {
   const { y, m, d } = parseISODate(date)
-  return `${d} de ${MONTH_NAMES[m - 1]} de ${y}`
+  return `${d} ${MONTH_NAMES[m - 1]} ${y}`
 }
 
 /**
- * The user message of the model call. A projection of the SPEC §3.3 view that carries only what
- * the model may say: display strings and integers of the SPEC §11.3 allowed set, dates of its
- * date vocabulary, entity names, and the labels of `selected`. No ids, no raw fractions, no
- * dayCountBase, no withholding rate, no threshold. Risk figures appear only for the selected
- * risks, so a risk the server did not select has nothing to be narrated from.
+ * The user message of the model call, SPEC §3.5. A projection of the SPEC §3.3 view that carries
+ * only what the model may say: display strings and integers of the SPEC §11.3 allowed set, dates
+ * of its date vocabulary in the long form, institution names, and the labels of `selected`. No
+ * ids, no raw fractions, no dayCountBase, no withholding rate, no threshold and no blended rate.
+ * Risk figures appear only for the selected risks, so a risk the server did not select has
+ * nothing to be narrated from.
  *
- * Keys are Spanish on purpose: the model reads them next to Spanish prose, and a key echoed
- * into a reply must not be an English word (SPEC §11.8).
+ * The keys are written in the order of the two tables of §3.5, and every key of more than one
+ * word is camelCase, which is what lets SPEC §11.8 step 4 catch a key echoed into a reply.
  */
 export interface ModelPayload {
-  fechaConsulta: string
-  fechaInicio: string
-  cantidadPeldanos: number
-  cantidadEntidades: number
-  totales: {
-    capital: string
-    interesBruto: string
-    retencion: string
-    interesNeto: string
-    tasaPromedio: string
+  asOfDate: string
+  startDate: string
+  rungCount: number
+  institutionCount: number
+  totals: {
+    principal: string
+    grossInterest: string
+    withholdingTax: string
+    netInterest: string
   }
-  proximoVencimiento: { fecha: string; diasDesdeLaFechaDeConsulta: number }
-  ultimoVencimiento: string
-  peldanos: {
-    numero: number
-    entidad: string
-    capital: string
-    plazoDias: number
-    tasaEA: string
-    vencimiento: string
-    interesBruto: string
-    retencion: string
-    interesNeto: string
+  nextMaturity: { date: string; daysFromAsOfDate: number }
+  lastMaturity: string
+  rungs: {
+    number: number
+    institution: string
+    principal: string
+    termDays: number
+    rateEA: string
+    maturity: string
+    grossInterest: string
+    withholdingTax: string
+    netInterest: string
   }[]
-  entidades: { entidad: string; capital: string; participacion: string }[]
-  riesgos: RiskEntry[]
+  institutions: { institution: string; principal: string; share: string }[]
+  risks: RiskEntry[]
 }
 
 export type RiskEntry =
   | {
-      etiqueta: string
-      entidades: { entidad: string; exposicion: string; topeDelSeguro: string; exceso: string }[]
+      label: string
+      institutions: {
+        institution: string
+        exposure: string
+        insuranceCeiling: string
+        excess: string
+      }[]
     }
-  | { etiqueta: string; entidades: { entidad: string; capital: string; participacion: string }[] }
+  | { label: string; institutions: { institution: string; principal: string; share: string }[] }
   | {
-      etiqueta: string
-      cantidadGrupos: number
-      grupos: {
-        cantidadPeldanos: number
-        numerosDePeldano: number[]
-        primerVencimiento: string
-        ultimoVencimiento: string
-        capital: string
+      label: string
+      groupCount: number
+      groups: {
+        rungCount: number
+        rungNumbers: number[]
+        firstMaturity: string
+        lastMaturity: string
+        principal: string
       }[]
     }
   | {
-      etiqueta: string
-      tasaMasAlta: string
-      peldanos: { numero: number; entidad: string; tasaEA: string }[]
+      label: string
+      highestRate: string
+      rungs: { number: number; institution: string; rateEA: string }[]
     }
 
 /** Expects the request validateRequest accepted and the view built from it. */
 export function buildModelPayload(request: ExplainRequest, view: ExplanationView): ModelPayload {
   const { totals } = view
   return {
-    fechaConsulta: formatDateLong(request.asOfDate),
-    fechaInicio: formatDateLong(request.ladder.startDate),
-    cantidadPeldanos: view.rungCount,
-    cantidadEntidades: view.entityCount,
-    totales: {
-      capital: totals.principalDisplay,
-      interesBruto: totals.grossInterestDisplay,
-      retencion: totals.retencionDisplay,
-      interesNeto: totals.netInterestDisplay,
-      tasaPromedio: view.blendedEADisplay,
+    asOfDate: formatDateLong(request.asOfDate),
+    startDate: formatDateLong(request.ladder.startDate),
+    rungCount: view.rungCount,
+    institutionCount: view.entityCount,
+    totals: {
+      principal: totals.principalDisplay,
+      grossInterest: totals.grossInterestDisplay,
+      withholdingTax: totals.retencionDisplay,
+      netInterest: totals.netInterestDisplay,
     },
-    proximoVencimiento: {
-      fecha: formatDateLong(view.nextMaturity),
-      diasDesdeLaFechaDeConsulta: view.daysToNextMaturity,
+    nextMaturity: {
+      date: formatDateLong(view.nextMaturity),
+      daysFromAsOfDate: view.daysToNextMaturity,
     },
-    ultimoVencimiento: formatDateLong(view.lastMaturity),
-    peldanos: view.perRung.map((r) => ({
-      numero: r.index,
-      entidad: r.entityName,
-      capital: r.principalDisplay,
-      plazoDias: r.days,
-      tasaEA: r.eaDisplay,
-      vencimiento: formatDateLong(r.maturityDate),
-      interesBruto: r.grossInterestDisplay,
-      retencion: r.retencionDisplay,
-      interesNeto: r.netInterestDisplay,
+    lastMaturity: formatDateLong(view.lastMaturity),
+    rungs: view.perRung.map((r) => ({
+      number: r.index,
+      institution: r.entityName,
+      principal: r.principalDisplay,
+      termDays: r.days,
+      rateEA: r.eaDisplay,
+      maturity: formatDateLong(r.maturityDate),
+      grossInterest: r.grossInterestDisplay,
+      withholdingTax: r.retencionDisplay,
+      netInterest: r.netInterestDisplay,
     })),
-    entidades: view.perEntity.map((e) => ({
-      entidad: e.entityName,
-      capital: e.principalDisplay,
-      participacion: e.shareOfCapitalDisplay,
+    institutions: view.perEntity.map((e) => ({
+      institution: e.entityName,
+      principal: e.principalDisplay,
+      share: e.shareOfCapitalDisplay,
     })),
     // SPEC §5.3: only the survivors of the priority, in priority order.
-    riesgos: view.risks.selected.map((key) => riskEntry(key, view)),
+    risks: view.risks.selected.map((key) => riskEntry(key, view)),
   }
 }
 
-/** Compact JSON: its string syntax is the delimiter around entity names (SPEC §8.3). */
+/** Compact JSON: its string syntax is the delimiter around institution names (SPEC §8.3). */
 export function renderUserMessage(payload: ModelPayload): string {
   return JSON.stringify(payload)
 }
 
 function riskEntry(key: RiskKey, view: ExplanationView): RiskEntry {
-  const etiqueta = RISK_LABELS[key]
+  const label = RISK_LABELS[key]
   switch (key) {
     case 'ceiling':
       return {
-        etiqueta,
-        entidades: view.risks.ceiling.entityIds.map((id) => {
+        label,
+        institutions: view.risks.ceiling.entityIds.map((id) => {
           const e = entityOf(view, id)
           return {
-            entidad: e.entityName,
-            exposicion: e.exposureDisplay,
-            topeDelSeguro: e.ceilingDisplay,
-            exceso: e.excessDisplay,
+            institution: e.entityName,
+            exposure: e.exposureDisplay,
+            insuranceCeiling: e.ceilingDisplay,
+            excess: e.excessDisplay,
           }
         }),
       }
     case 'concentration':
       return {
-        etiqueta,
-        entidades: view.risks.concentration.entityIds.map((id) => {
+        label,
+        institutions: view.risks.concentration.entityIds.map((id) => {
           const e = entityOf(view, id)
           return {
-            entidad: e.entityName,
-            capital: e.principalDisplay,
-            participacion: e.shareOfCapitalDisplay,
+            institution: e.entityName,
+            principal: e.principalDisplay,
+            share: e.shareOfCapitalDisplay,
           }
         }),
       }
     case 'clustered':
       return {
-        etiqueta,
-        cantidadGrupos: view.clusterCount,
-        grupos: view.clusters.map((c) => ({
-          cantidadPeldanos: c.count,
-          numerosDePeldano: c.rungIndexes,
-          primerVencimiento: formatDateLong(c.startDate),
-          ultimoVencimiento: formatDateLong(c.endDate),
-          capital: c.principalDisplay,
+        label,
+        groupCount: view.clusterCount,
+        groups: view.clusters.map((c) => ({
+          rungCount: c.count,
+          rungNumbers: c.rungIndexes,
+          firstMaturity: formatDateLong(c.startDate),
+          lastMaturity: formatDateLong(c.endDate),
+          principal: c.principalDisplay,
         })),
       }
     case 'rateGap': {
@@ -191,11 +196,11 @@ function riskEntry(key: RiskKey, view: ExplanationView): RiskEntry {
       const highest = view.perRung.find((r) => basisPoints(r.ea) === maxBp)
       if (highest === undefined) throw new Error('no rung carries the highest rate of the view')
       return {
-        etiqueta,
-        tasaMasAlta: highest.eaDisplay,
-        peldanos: rungIndexes.map((index) => {
+        label,
+        highestRate: highest.eaDisplay,
+        rungs: rungIndexes.map((index) => {
           const r = view.perRung[index - 1]
-          return { numero: r.index, entidad: r.entityName, tasaEA: r.eaDisplay }
+          return { number: r.index, institution: r.entityName, rateEA: r.eaDisplay }
         }),
       }
     }

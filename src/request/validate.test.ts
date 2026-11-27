@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { addDays, validateScenario, type ScenarioInput } from '../engine'
+import { addDays, formatCOP, validateScenario, type ScenarioInput } from '../engine'
+import { formatDateLong } from '../model/payload'
 import {
   SPEC_MD,
   VALID_CASES,
@@ -7,6 +8,8 @@ import {
   caseById,
   inputOf,
   specErrorMessage,
+  specSection,
+  tableRows,
   type RawRequest,
 } from '../test-support/contract'
 import { ERROR_MESSAGE } from './errors'
@@ -119,7 +122,7 @@ describe('bodies that are not JSON (plan decision 2)', () => {
           source: 'api',
           code: 'invalid_json',
           path: '',
-          message: 'El cuerpo de la solicitud no es JSON válido.',
+          message: 'The request body is not valid JSON.',
         },
       ],
     })
@@ -172,7 +175,7 @@ describe('criterion 5: the two asOfDate rules (SPEC §2.1)', () => {
           source: 'api',
           code: 'as_of_date_invalid',
           path: 'asOfDate',
-          message: 'La fecha de consulta no es válida.',
+          message: 'The as-of date is not valid.',
         },
       ],
     })
@@ -194,7 +197,7 @@ describe('criterion 5: the two asOfDate rules (SPEC §2.1)', () => {
           source: 'api',
           code: 'as_of_date_after_last_maturity',
           path: 'asOfDate',
-          message: 'La fecha de consulta es posterior al último vencimiento de la escalera.',
+          message: "The as-of date is after the ladder's last maturity.",
         },
       ],
     })
@@ -215,19 +218,19 @@ describe('the per-rung range stage (SPEC §8.5)', () => {
     source: 'api',
     code: 'principal_out_of_range',
     path: `rungs[${i}].principal`,
-    message: 'El monto no puede superar 1.000.000.000.000 pesos.',
+    message: 'The amount cannot exceed COP 1,000,000,000,000.',
   })
   const daysIssue = (i: number) => ({
     source: 'api',
     code: 'days_out_of_range',
     path: `rungs[${i}].days`,
-    message: 'El plazo no puede superar 3.650 días.',
+    message: 'The term cannot exceed 3,650 days.',
   })
   const maturityIssue = (i: number) => ({
     source: 'api',
     code: 'maturity_out_of_range',
     path: `rungs[${i}].days`,
-    message: 'El vencimiento no puede ser posterior al 31 de diciembre de 9999.',
+    message: 'The maturity cannot be later than 31 December 9999.',
   })
   /** Case 1 started on `startDate`, every rung with the term `days`, asOfDate the start. */
   function startingOn(startDate: string, days: number): RawRequest {
@@ -425,6 +428,178 @@ describe('the largest legal body, re-measured with thirteen-digit principals (SP
     console.info(`largest legal body, ${variant.label}: ${bytes} bytes of ${MAX_BODY_BYTES}`)
     expect(bytes).toBe(variant.bytes)
     expect(bytes).toBeLessThanOrEqual(MAX_BODY_BYTES)
+  })
+})
+
+describe('the six API messages are those of SPEC §7.3 and §8.5', () => {
+  /** code → [path, message], from a table whose first three columns are Code, Path, Message. */
+  const rowsOf = (section: string, header: string) =>
+    new Map(
+      tableRows(section, header).flatMap(([codes, path, message]) =>
+        [...codes.matchAll(/`([a-z_]+)`/g)].map(([, code]) => [code, { path, message }] as const),
+      ),
+    )
+  const api = rowsOf(
+    specSection('### 7.3 API issues', '### 7.4'),
+    '| Code | Path | Message | Row of the §7 table |',
+  )
+  const range = rowsOf(specSection('### 8.5 Per-rung range limits', '### 8.6'), '| Code | Path | Message |')
+  const issueOf = (body: unknown) => {
+    const { issues } = refused(typeof body === 'string' ? body : JSON.stringify(body)).body.error
+    expect(issues).toHaveLength(1)
+    return issues[0] as { source: string; code: string; path: string; message: string }
+  }
+
+  it('§7.3 has six codes, three of them given in §8.5', () => {
+    expect([...api.keys()]).toEqual([
+      'invalid_json',
+      'principal_out_of_range',
+      'days_out_of_range',
+      'maturity_out_of_range',
+      'as_of_date_invalid',
+      'as_of_date_after_last_maturity',
+    ])
+    expect([...range.keys()]).toEqual([
+      'principal_out_of_range',
+      'days_out_of_range',
+      'maturity_out_of_range',
+    ])
+    for (const code of range.keys()) expect(api.get(code)?.message).toBe('given in §8.5')
+  })
+
+  it('invalid_json and the two asOfDate codes carry the message and the path of their §7.3 row', () => {
+    const invalidDate = inputOf('healthy-3-rung')
+    invalidDate.asOfDate = '2027-02-31'
+    const late = inputOf('healthy-3-rung')
+    late.asOfDate = addDays(lastMaturityOf(late), 1)
+    for (const [code, body] of [
+      ['invalid_json', '{not json'],
+      ['as_of_date_invalid', invalidDate],
+      ['as_of_date_after_last_maturity', late],
+    ] as const) {
+      const issue = issueOf(body)
+      expect(issue).toMatchObject({ source: 'api', code })
+      expect(issue.message, code).toBe(api.get(code)?.message)
+      // The empty path is written `""` in the table; the other two name the field.
+      expect(issue.path, code).toBe(code === 'invalid_json' ? '' : 'asOfDate')
+      expect(api.get(code)?.path, code).toContain(code === 'invalid_json' ? '`""`' : '`asOfDate`')
+    }
+  })
+
+  it('the three range codes carry the message of their §8.5 row, on the path of the rung', () => {
+    const overPrincipal = inputOf('healthy-3-rung')
+    overPrincipal.ladder.rungs[1].principal = MAX_RUNG_PRINCIPAL + 1
+    const overDays = inputOf('healthy-3-rung')
+    overDays.ladder.rungs[1].days = MAX_RUNG_DAYS + 1
+    const overMaturity = inputOf('healthy-3-rung')
+    overMaturity.ladder.startDate = '9999-12-01'
+    overMaturity.asOfDate = '9999-12-01'
+    overMaturity.ladder.rungs.forEach((rung) => (rung.days = 30))
+    overMaturity.ladder.rungs[1].days = 31
+    for (const [code, body, field] of [
+      ['principal_out_of_range', overPrincipal, 'principal'],
+      ['days_out_of_range', overDays, 'days'],
+      ['maturity_out_of_range', overMaturity, 'days'],
+    ] as const) {
+      const issue = issueOf(body)
+      expect(issue).toMatchObject({ source: 'api', code, path: `rungs[1].${field}` })
+      expect(issue.message, code).toBe(range.get(code)?.message)
+      expect(range.get(code)?.path, code).toBe(`\`rungs[i].${field}\``)
+    }
+  })
+
+  it('the amount and the term are written as the engine prints them, the date in the long form', () => {
+    expect(range.get('principal_out_of_range')?.message).toBe(
+      `The amount cannot exceed ${formatCOP(MAX_RUNG_PRINCIPAL)}.`,
+    )
+    expect(range.get('days_out_of_range')?.message).toBe(
+      `The term cannot exceed ${formatCOP(MAX_RUNG_DAYS).replace('COP ', '')} days.`,
+    )
+    expect(range.get('maturity_out_of_range')?.message).toBe(
+      `The maturity cannot be later than ${formatDateLong(MAX_MATURITY_DATE)}.`,
+    )
+  })
+})
+
+describe('SPEC §7.2: the 14 engine issues, each from an input with that one defect', () => {
+  const rows = tableRows(
+    specSection('### 7.2 Engine validation issues', '### 7.3'),
+    '| Code | Path | Message |',
+  ).map(([code, path, message]) => ({
+    code: code.replace(/`/g, ''),
+    path: path.replace(/`/g, ''),
+    message,
+  }))
+  const base = (): ScenarioInput => structuredClone(inputOf('healthy-3-rung').ladder) as ScenarioInput
+  const withDefect = (change: (ladder: ScenarioInput) => void): ScenarioInput => {
+    const ladder = base()
+    change(ladder)
+    return ladder
+  }
+  /** One input per code, in the order of the table. */
+  const defects: Record<string, ScenarioInput> = {
+    start_date_invalid: withDefect((l) => (l.startDate = '2027-02-31')),
+    rungs_empty: withDefect((l) => (l.rungs = [])),
+    entity_id_duplicate: withDefect((l) => {
+      // The second entry takes the first one's id, and its rung moves with it.
+      const [first, second] = l.entities
+      for (const rung of l.rungs) if (rung.entityId === second.id) rung.entityId = first.id
+      second.id = first.id
+    }),
+    entity_name_empty: withDefect((l) => (l.entities[0].name = '   ')),
+    principal_invalid: withDefect((l) => (l.rungs[0].principal = -5_000_000)),
+    days_invalid: withDefect((l) => (l.rungs[0].days = 0)),
+    ea_out_of_range: withDefect((l) => (l.rungs[0].ea = 5)),
+    entity_missing: withDefect((l) => (l.rungs[0].entityId = 'nowhere')),
+    rollover_cycles_invalid: withDefect((l) => (l.rollover = { mode: 'cycles', cycles: 37 })),
+    rollover_horizon_invalid: withDefect(
+      (l) => (l.rollover = { mode: 'horizon', horizonDate: '2028-02-30' }),
+    ),
+    rollover_horizon_before_start: withDefect(
+      (l) => (l.rollover = { mode: 'horizon', horizonDate: l.startDate }),
+    ),
+    day_count_base_invalid: withDefect((l) => ((l.dayCountBase as number) = 364)),
+    retencion_out_of_range: withDefect((l) => (l.fiscal.retencionRate = 1)),
+    ceiling_invalid: withDefect((l) => (l.fiscal.insuranceCeiling = -1)),
+  }
+
+  it('the table has 14 rows, and the base input has no defect', () => {
+    expect(rows).toHaveLength(14)
+    expect(rows.map((row) => row.code)).toEqual(Object.keys(defects))
+    expect(validateScenario(base())).toEqual([])
+  })
+
+  it.each(Object.keys(defects))('%s: the code, the path and the message of its row', (code) => {
+    const row = rows.find((r) => r.code === code)
+    expect(validateScenario(defects[code])).toEqual([row])
+  })
+
+  it('no message holds a Spanish word of the SPEC §11.8 list, a peso sign or a spaced percent', () => {
+    const list = /`(\\b\(el\|la\|[^`]+)`/.exec(specSection('### 11.8', '### 11.9'))
+    if (!list) throw new Error('the Spanish list was not found in SPEC §11.8')
+    for (const { code, message } of rows) {
+      expect(message.match(new RegExp(list[1], 'gi')), code).toBeNull()
+      expect(message, code).not.toMatch(/\$| %/)
+    }
+  })
+
+  it('four of the 14 cannot reach a client: the schema refuses the body first', () => {
+    for (const code of ['rollover_cycles_invalid', 'rollover_horizon_invalid', 'rungs_empty']) {
+      const body = { asOfDate: '2027-01-04', ladder: defects[code] }
+      expect(refused(JSON.stringify(body)).stage, code).toBe('schema')
+    }
+    const body = { asOfDate: '2027-01-04', ladder: defects.rollover_horizon_before_start }
+    expect(refused(JSON.stringify(body)).stage).toBe('schema')
+  })
+
+  it('the other ten reach a client verbatim, tagged with their source', () => {
+    const reachable = rows.filter((row) => !row.code.startsWith('rollover_') && row.code !== 'rungs_empty')
+    expect(reachable).toHaveLength(10)
+    for (const row of reachable) {
+      const outcome = refused(JSON.stringify({ asOfDate: '2027-01-04', ladder: defects[row.code] }))
+      expect(outcome.stage, row.code).toBe('engine')
+      expect(outcome.body.error.issues, row.code).toEqual([{ source: 'engine', ...row }])
+    }
   })
 })
 

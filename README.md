@@ -1,16 +1,21 @@
 # lab / cdt-ladder-api
 
 One endpoint. It receives a CDT ladder (Colombian term deposits) and returns a
-short explanation in plain Spanish: what happens and when, and up to three risks
+short explanation in plain English: what happens and when, and up to three risks
 from a closed catalogue. The model never does arithmetic. Every figure is
 recomputed on the server by the same engine the calculator runs, the model
 receives finished figures only, and every reply is verified against rules
 derived for that request before it is returned.
 
+This is version 2.0, which moved the product from Spanish to English: the reply,
+every fixed string, the JSON handed to the model and the rules that verify a
+reply. The market stays Colombian. Version 1, the Spanish system, is the tag
+`v1-es`.
+
 **Live:** the "Explícame esta escalera" button in
 [lab-cdt-ladder](https://estebancitox.github.io/lab-cdt-ladder/), the
 calculator this endpoint explains. The URL is public within two daily caps; past
-them a request answers 429 with a fixed Spanish message and a `retry-after`
+them a request answers 429 with a fixed English message and a `retry-after`
 header.
 
 ## How a request is answered
@@ -33,42 +38,44 @@ first.
    failed validation never reaches them.
 4. **Ask the model.** The payload carries finished figures and their display
    strings; the model's only job is to choose which of them to say and how. One
-   call to `claude-sonnet-5-5` with prompt v1 (`src/model/prompt.v1.ts`) and a
+   call to `claude-sonnet-5-5` with prompt v2 (`src/model/prompt.v2.ts`) and a
    20 s deadline.
 5. **Verify.** The rules of SPEC §11, derived for this request alone (§11.12),
    run on the reply: every number, date and percentage is one the server
    computed; every entity that holds a rung is mentioned, and every rung when
    there are at most six on distinct dates; each of the four risks is flagged
    if and only if the engine selected it, at most three by priority; no advice
-   verbs; Spanish; a word budget by rung count; a guard against instructions
-   smuggled in an entity name.
+   verbs; English, with no Spanish word of a closed list and no echoed payload
+   key; a word budget by rung count; a guard against instructions smuggled in
+   an entity name.
 6. **Return, retry or refuse.** A reply that passes is returned as is. One that
    fails is never returned, with or without a warning: the handler retries once
    when the time budget allows it, and otherwise answers 502 with the failed
    rule names as metadata.
 
-The reply is plain text in two sections with fixed headers (SPEC §4). Run 1 of
-the first evaluation case, from the stored run of 2026-10-29 (3 041 input tokens,
-246 output, $0.008542, 3 000 ms), is also the recorded example the calculator
-offers when the service gave no answer:
+The reply is plain text in two sections with fixed headers (SPEC §4). No English
+reply from the model is stored yet: the two stored runs are records of version
+1, and the first English run comes after this change. Until then the examples
+are the two constructed replies of SPEC §10.2, written by hand from a case's own
+figures and held to the same rules as a model's reply. The one for the tenth
+case, where no risk triggers:
 
 ```
-Qué pasa y cuándo
+What happens and when
 
-Tu escalera tiene $ 50.000.000 de capital repartidos en 3 peldaños y 3 entidades, con una tasa promedio de 13,5%. El peldaño 1, en Banco Andino, vence el 4 de abril de 2027. El peldaño 2, en Cooperativa Ñame & Café, vence el 3 de julio de 2027. El peldaño 3, en Entidad B, vence el 1 de octubre de 2027.
+Your ladder holds COP 75,000,000 in 3 rungs across 3 institutions. Rung 1, at Banco Andino, matures on 4 April 2027; rung 2, at Entidad B, on 5 May 2027; and rung 3, at Entidad A, on 5 June 2027. After withholding tax of COP 140,705, the ladder pays COP 3,376,928 in net interest.
 
-El próximo vencimiento está a 90 días de hoy. La escalera paga $ 3.109.733 de interés neto, después de una retención de $ 129.572.
+Risks
 
-Riesgos
-
-Sin riesgos para señalar con estos datos.
+No risks to flag with this data.
 ```
 
 When a risk triggers, the second section holds up to three bullets, each opening
-with a label from a closed vocabulary. The second case's run 1 ends with:
+with a label from a closed vocabulary. The constructed reply for the second case
+ends with:
 
 ```
-- Tope del seguro: en Entidad A, el capital más el interés antes de retención suma $ 50.069.493, por encima del tope del seguro de $ 50.000.000, con un exceso de $ 69.493.
+- Deposit-insurance ceiling: at Entidad A, principal plus gross interest comes to COP 50,069,493, which is COP 69,493 above the ceiling of COP 50,000,000.
 ```
 
 ## The number stays honest
@@ -85,14 +92,14 @@ The same discipline bounds what the model may say:
 - **Every number must exist verbatim.** Exact set membership after
   normalization, with no tolerance (SPEC §5.1, §11.3). A bare year is not a date
   and fails the check.
-- **No advice.** "deberías", "te recomiendo" and the rest of a closed list may
-  not appear (§5.2). The endpoint describes; it does not counsel.
+- **No advice.** "should", "recommend" and the rest of a closed list may not
+  appear (§5.2). The endpoint describes; it does not counsel.
 - **A closed risk catalogue.** Four risks, four labels, nominal on purpose:
-  "Tope del seguro", "Concentración", "Vencimientos agrupados", "Diferencia de
-  tasa". The model may not add a rung, rename an entity or raise a risk the
-  server did not trigger (§5.3). "Tasa baja" was rejected as a label because it
-  is a verdict, and a verdict sits badly next to a rule forbidding advice.
-- **Fixed error strings.** Three byte-exact Spanish messages cover every refusal
+  "Deposit-insurance ceiling", "Concentration", "Clustered maturities", "Rate
+  difference". The model may not add a rung, rename an entity or raise a risk
+  the server did not trigger (§5.3). A label like "Low rate" would be a verdict,
+  and a verdict sits badly next to a rule forbidding advice.
+- **Fixed error strings.** Three byte-exact English messages cover every refusal
   (§7). No error path returns a 200 with a templated explanation, because a
   template that looks like an explanation would quietly satisfy every rule.
 
@@ -104,21 +111,26 @@ The evaluation suite is ten cases in `evals/cases.json`, eight valid and two
 invalid, each a complete request body with its rules. The harness runs the same
 engine the endpoint runs to derive the allowed numbers, so ground truth cannot be
 influenced by whoever wrote the fixture. The last paid run, on 2026-10-29
-(`evals/runs/2026-10-29T23-18-30Z/`), made 26 runs and 24 model calls, three per
-valid case, and every rule passed in every run. It cost $0.224490 at list prices,
-$0.00935 per call on average, and the handler answered, model call included,
-within 3 344 ms at the 95th percentile and 3 594 ms at worst. A stored run can
-be re-scored for free:
-`npm run eval:replay` re-evaluates its replies with the rules as they are now and
-writes a report beside them, never rewriting the measurement.
+(`evals/runs/2026-10-29T23-18-30Z/`), is a run of version 1: Spanish replies
+under the Spanish prompt, judged by the v1 rules. It made 26 runs and 24 model
+calls, three per valid case, and every rule passed in every run. It cost
+$0.224490 at list prices, $0.00935 per call on average, and the handler answered,
+model call included, within 3 344 ms at the 95th percentile and 3 594 ms at
+worst. Those figures describe the Spanish system and are not comparable with
+version 2 results; no English run is stored yet, and under the rules of this
+version all 48 stored replies fail the language rule (SPEC §10.2). A stored run
+of this version can be re-scored for free: `npm run eval:replay` re-evaluates its
+replies with the rules as they are now and writes a report beside them, never
+rewriting the measurement. Given a v1 run it says the run is not comparable and
+writes nothing.
 
-The test suite is 576 tests in 27 files, and `npm run test:ci` runs it twice,
+The test suite is 738 tests in 28 files, and `npm run test:ci` runs it twice,
 under `TZ=America/Bogota` and under `TZ=UTC`, because every date is
 calendar-day arithmetic that must not depend on the host's zone. The upstream
-engine's own tests, 917 lines in 8 files, are among them.
+engine's own tests, 1 032 lines in 8 files, are among them.
 
 The engine is a vendored copy, not a dependency: 18 files extracted from commit
-`6444d05df4385343d5593b94d9e5822cad647e10` of lab-cdt-ladder on 2026-09-26, never
+`6e23cdd6ef1e02611fc82e908d7c6df1095641ce` of lab-cdt-ladder on 2026-11-26, never
 edited, with a SHA-256 per file in `src/engine/VENDOR.md` that `src/vendor.test.ts`
 re-hashes on every test run. CI (`.github/workflows/ci.yml`) runs the typecheck,
 the two-zone suite and `scripts/verify-vendor.sh` against the pinned commit on
@@ -147,9 +159,10 @@ a spend alarm watches the spend (SPEC §8.2).
 - **A spend alarm.** Two metric filters read the token counts from the log line;
   an alarm prices them at list prices over a sliding 24 hours and fires at $0.50
   (`DailySpendAlarmUsd`) through an SNS topic the owner subscribes to outside
-  the repository. At the measured mean that is about 53 requests, below the cap
-  by design. The hard ceiling is the Anthropic organization's monthly spend
-  limit, $20 as set on 2026-11-01, on a prepaid balance with auto-reload off.
+  the repository. At the mean measured on the v1 run that is about 53 requests,
+  below the cap by design. The hard ceiling is the Anthropic organization's
+  monthly spend limit, $20 as set on 2026-11-01, on a prepaid balance with
+  auto-reload off.
 - **CORS, which is not access control.** The URL names two origins,
   `https://estebancitox.github.io` and `http://localhost:5173`, the method
   `POST`, the header `content-type`, and exposes `retry-after`. It tells a
@@ -173,16 +186,17 @@ replay.
 ```sh
 npm ci
 npm run typecheck
-npm run test:ci          # 576 tests under TZ=America/Bogota, then under TZ=UTC
+npm run test:ci          # 738 tests under TZ=America/Bogota, then under TZ=UTC
 npm run verify:vendor    # the vendored engine against ../lab-cdt-ladder at the pinned commit
-npm run eval:replay -- evals/runs/2026-10-29T23-18-30Z/results.json   # free: re-scores the stored replies
+npm run eval:replay -- evals/runs/2026-10-29T23-18-30Z/results.json   # free; a v1 run is reported as not comparable
 ```
 
 A paid run needs the Anthropic API key in an AWS SSM SecureString, the name of
 that parameter in `API_KEY_PARAMETER`, and AWS credentials that may read it. The
-key itself is never an environment variable here. One run makes 24 model calls,
-about $0.22 at list prices, and writes `evals/runs/<timestamp>/results.json` and
-`report.md`:
+key itself is never an environment variable here. One run makes 24 model calls
+when no reply needs a verification retry, and writes
+`evals/runs/<timestamp>/results.json` and `report.md`. The v1 run of 2026-10-29
+cost about $0.22 at list prices; no English run has been priced yet:
 
 ```sh
 API_KEY_PARAMETER=/lab-cdt-ladder-api/anthropic-api-key AWS_PROFILE=lab AWS_REGION=us-east-2 npm run eval:live
@@ -202,21 +216,21 @@ without contacting anything.
 The SPEC is long on purpose: it is the contract, and the code is tested against
 it.
 
-- `SPEC.md`: 1 608 lines, v1.5. §13 "Decisions" carries each revision's
-  accepted, deferred and rejected items with dates.
+- `SPEC.md`: 2 373 lines, v2.0. §13 "Decisions" carries each revision's
+  accepted, deferred and rejected items with dates, version 1's included.
 - `docs/spec-review.md`: the adversarial review of 2026-09-13 that §13 points at.
   270 claims checked, 3 refuted, and the finding that moved the client out of
   the trust boundary.
 - `schemas/explain-request.v1.json`: the request schema, JSON Schema draft-07.
-- `evals/cases.json` and `evals/runs/`: the ten cases and two stored runs,
-  2026-10-06 and 2026-10-29.
+- `evals/cases.json` and `evals/runs/`: the ten cases, version 2, and the two
+  stored runs of version 1, 2026-10-06 and 2026-10-29.
 - `src/handler.ts`, `src/limits.ts`, `src/budget.ts`, `src/response.ts`: the
   pipeline, the caps, the time budget, the fixed bodies.
 - `src/request/`: the byte cap, JSON, schema, engine validation and range limits.
 - `src/explain/`: the explanation view, its four derivations and the risk
   priority.
-- `src/model/`: prompt v1, the payload, the call with its deadline, the key read
-  from SSM.
+- `src/model/`: prompt v2, the payload, the call with its deadline, the key read
+  from SSM, and prompt v1, kept as the record of what the v1 runs ran against.
 - `src/rules/`: the §11 rules, normalization, entity spans, ground truth and the
   derivation of the production rule set.
 - `src/eval/`: the harness: the paid run, the replay, the report.
@@ -249,12 +263,12 @@ platform's own 429 in the table is the exception.
 | Status | `error.code` | When | What the client sees |
 |---|---|---|---|
 | 200 | none | the reply passed verification | `text`, the explanation |
-| 400 | `invalid_input` | body not JSON, schema violation, engine validation, a per-rung range limit, `asOfDate` invalid or after the last maturity | "No puedo explicar esta escalera: los datos recibidos no son válidos." plus `error.issues` |
+| 400 | `invalid_input` | body not JSON, schema violation, engine validation, a per-rung range limit, `asOfDate` invalid or after the last maturity | "I cannot explain this ladder: the data received is not valid." plus `error.issues` |
 | 413 | `payload_too_large` | body over 8 KiB | the same message |
-| 429 | `ip_limit_reached` | this address's daily cap reached | "No puedo explicar esta escalera por ahora: se alcanzó el límite diario de solicitudes." plus `retry-after` |
+| 429 | `ip_limit_reached` | this address's daily cap reached | "I cannot explain this ladder for now: the daily request limit has been reached." plus `retry-after` |
 | 429 | `daily_limit_reached` | the cap for every client together reached | the same message and header |
 | 429 | none | the function throttled or switched off; the platform's own body | not this service's body: a client tells it apart by the missing `error.code` |
-| 502 | `verification_failed` | the reply failed verification, with no time for a retry or on the retry too | "No puedo explicar esta escalera en este momento: el servicio no está disponible." plus the failed rule names in `error.issues` |
+| 502 | `verification_failed` | the reply failed verification, with no time for a retry or on the retry too | "I cannot explain this ladder right now: the service is unavailable." plus the failed rule names in `error.issues` |
 | 503 | `upstream_unavailable` | model unavailable or timed out, its key unreadable, or the counters unavailable | the same message |
 | 503 | `upstream_truncated` | the reply cut at `max_tokens` | the same message |
 | 500 | `internal_error` | a defect in the service | the same message |
