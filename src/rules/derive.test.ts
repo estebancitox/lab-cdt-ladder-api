@@ -5,6 +5,8 @@ import {
   SPEC_MD,
   V1_REPLIES,
   V1_RUNS,
+  V2_REPLIES,
+  V2_RUN,
   VALID_CASES,
   acceptedRequest,
   caseById,
@@ -33,15 +35,16 @@ const TABLE_NAMES = specRuleNames()
 const PRODUCTION_NAMES = TABLE_NAMES.filter((name) => name !== 'error_message_exact')
 
 describe('SPEC §8.6 verification overhead', () => {
-  it('nearest-rank p95 over the eight constructed replies is at most 50 ms', () => {
+  it('nearest-rank p95 over the 24 replies of the stored v2 run is at most 50 ms', () => {
     // A, D, S, the entity names and the derived set are built before the window, as §8.6 states;
-    // the spans, the verdicts and the issue names are built inside it. Until a v2 run is stored
-    // the overhead is timed over the constructed replies (§10.2).
-    const inputs = CONSTRUCTED.map((r) => ({
+    // the spans, the verdicts and the issue names are built inside it. The overhead was timed
+    // over the constructed replies until a v2 run was stored, and is timed over that run's
+    // replies since (§10.2).
+    const inputs = V2_REPLIES.map((r) => ({
       text: r.text,
       ...prepared(caseById(r.caseId).input),
     }))
-    expect(inputs).toHaveLength(8)
+    expect(inputs).toHaveLength(24)
     const ms = inputs.map(({ text, truth, rules }) => {
       const start = performance.now()
       failedRuleNames(evaluate(text, truth, rules))
@@ -51,7 +54,7 @@ describe('SPEC §8.6 verification overhead', () => {
     const rank = (p: number) => sorted[Math.ceil(p * sorted.length) - 1]
     const f = (x: number) => x.toFixed(3)
     console.info(
-      `verification overhead over ${sorted.length} constructed replies, ms: min ${f(sorted[0])}, ` +
+      `verification overhead over ${sorted.length} replies of ${V2_RUN}, ms: min ${f(sorted[0])}, ` +
         `p50 ${f(rank(0.5))}, p95 ${f(rank(0.95))}, max ${f(sorted[sorted.length - 1])}`,
     )
     expect(rank(0.95)).toBeLessThanOrEqual(50)
@@ -252,6 +255,38 @@ describe('SPEC §11.12 derivation of the production rule set', () => {
         for (const e of view.perEntity) expect(text, e.entityName).toContain(e.entityName)
       },
     )
+  })
+
+  describe('the 24 replies of the stored v2 run (SPEC §10.2)', () => {
+    it('are three replies for each of the eight valid cases', () => {
+      expect(V2_REPLIES).toHaveLength(24)
+      for (const c of VALID_CASES) {
+        expect(V2_REPLIES.filter((r) => r.caseId === c.id).map((r) => r.run)).toEqual([1, 2, 3])
+      }
+    })
+
+    it('all 24 pass their derived set and their fixture rules', () => {
+      // The handler verified each against its derived set before answering 200, and the harness
+      // judged each by its case's rules. Both hold again with the rules as they are now.
+      for (const r of V2_REPLIES) {
+        const c = caseById(r.caseId)
+        const { truth, rules } = prepared(c.input)
+        const where = `${r.caseId} run ${r.run}`
+        expect(
+          evaluate(r.text, truth, rules).filter((v) => !v.pass),
+          where,
+        ).toEqual([])
+        expect(
+          evaluate(r.text, truth, c.rules).filter((v) => !v.pass),
+          where,
+        ).toEqual([])
+      }
+    })
+
+    it('none is one of the constructed replies, which stay fixtures and not results', () => {
+      const constructed = new Set(CONSTRUCTED.map((r) => r.text))
+      expect(V2_REPLIES.filter((r) => constructed.has(r.text))).toEqual([])
+    })
   })
 
   describe('the 48 stored replies of v1 (SPEC §10.2, §11.8)', () => {

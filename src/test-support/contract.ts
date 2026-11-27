@@ -182,6 +182,19 @@ export const V1_REPLIES: readonly { directory: string; caseId: string; run: numb
       .map((r) => ({ directory, caseId: r.caseId, run: r.run, text: r.text as string })),
   )
 
+/**
+ * The first stored run of version 2 (SPEC §10.2): prompt v2, 24 English replies, each of which
+ * the handler verified before answering 200. It is the run §10.2 says the verification overhead
+ * is timed over once it is stored. The reference run of R stays STORED_RUN until a revision of
+ * the SPEC names another (§8.6).
+ */
+export const V2_RUN = 'evals/runs/2026-11-27T01-06-08Z'
+
+/** The 24 replies of the stored v2 run, in the order of the run. */
+export const V2_REPLIES: readonly { caseId: string; run: number; text: string }[] = runsOf(V2_RUN)
+  .filter((r) => r.status === 200 && r.text !== null)
+  .map((r) => ({ caseId: r.caseId, run: r.run, text: r.text as string }))
+
 /** The engine commit SPEC.md pins in its header. */
 export function specEnginePin(): string {
   const m = /engine pinned at `([0-9a-f]{40})`/.exec(SPEC_MD)

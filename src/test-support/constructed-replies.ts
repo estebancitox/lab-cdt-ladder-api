@@ -2,9 +2,11 @@ import { VALID_CASES, specExample } from './contract'
 
 /**
  * The constructed replies of SPEC §10.2: one compliant English reply per valid case, eight in
- * all. Until a v2 run is stored no English model output exists, so a test that needs a reply
- * known to pass verification uses one of these. Each is written by hand in the output structure
- * of §4, and its every figure, date and name is copied from its case's view and request.
+ * all. They were written before any English model output existed, for the tests that need a
+ * reply known to pass verification, and they stay as those tests' fixtures now that a v2 run is
+ * stored (V2_RUN in contract.ts); only the verification overhead moved to that run's replies,
+ * as §10.2 says. Each is written by hand in the output structure of §4, and its every figure,
+ * date and name is copied from its case's view and request.
  *
  * A constructed reply is a fixture, not an evaluation result: it is never stored under
  * evals/runs/ and never counted in a pass rate. derive.test.ts asserts that each passes the

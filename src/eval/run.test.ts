@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ERROR_MESSAGE } from '../request/errors'
 import { UPSTREAM_MESSAGE } from '../response'
 import { constructedReply } from '../test-support/constructed-replies'
-import { CASES, CASES_VERSION, V1_RUNS, caseById } from '../test-support/contract'
+import { CASES, CASES_VERSION, V1_RUNS, V2_RUN, caseById } from '../test-support/contract'
 import type { FetchCounter } from './fetch-counter'
 
 /**
@@ -424,6 +424,26 @@ describe('replay: stored replies re-evaluated with the rules as they are now', (
     // A run made from here on records the prompt it ran against, which is v2.
     const { PROMPT_VERSION } = await import('../model/prompt.v2')
     expect(comparable({ promptVersion: PROMPT_VERSION })).toBe(true)
+  })
+
+  it('the stored v2 run is comparable, and replayed it gives every verdict it recorded', async () => {
+    const { comparable, replay } = await import('./replay-core')
+    const stored = JSON.parse(
+      readFileSync(new URL(`../../${V2_RUN}/results.json`, import.meta.url), 'utf8'),
+    ) as import('./suite').SuiteResult
+    expect(stored.promptVersion).toBe('v2')
+    expect(comparable(stored)).toBe(true)
+    // 26 runs: three per valid case and one per invalid case, each with the rules of its case.
+    expect(stored.runs).toHaveLength(26)
+    const recorded = stored.runs.flatMap((r) => r.verdicts)
+    expect(recorded).toHaveLength(245)
+    expect(recorded.filter((v) => !v.pass)).toEqual([])
+    // The rules as they are now give each of them again, run by run and rule by rule.
+    const replayed = replay(stored, [...CASES])
+    expect(replayed.runs.map((r) => r.verdicts)).toEqual(stored.runs.map((r) => r.verdicts))
+    // Only the verdicts are recomputed: the measurement is kept as it was stored.
+    const measured = (r: import('./suite').RunRecord) => ({ ...r, verdicts: undefined })
+    expect(replayed.runs.map(measured)).toEqual(stored.runs.map(measured))
   })
 
   it('replayed anyway, a v1 run fails language_en in each of its 24 replies, which says nothing of the run', async () => {

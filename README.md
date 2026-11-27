@@ -12,11 +12,10 @@ every fixed string, the JSON handed to the model and the rules that verify a
 reply. The market stays Colombian. Version 1, the Spanish system, is the tag
 `v1-es`.
 
-**Live:** the "Explícame esta escalera" button in
+**Live:** the "Explain this ladder" button in
 [lab-cdt-ladder](https://estebancitox.github.io/lab-cdt-ladder/), the
 calculator this endpoint explains. The URL is public within two daily caps; past
 them a request answers 429 with a fixed message and a `retry-after` header.
-What is live stays version 1, the Spanish system, until this version is deployed.
 
 ## How a request is answered
 
@@ -54,17 +53,19 @@ first.
    when the time budget allows it, and otherwise answers 502 with the failed
    rule names as metadata.
 
-The reply is plain text in two sections with fixed headers (SPEC §4). No English
-reply from the model is stored yet: the two stored runs are records of version
-1, and the first English run comes after this change. Until then the examples
-are the two constructed replies of SPEC §10.2, written by hand from a case's own
-figures and held to the same rules as a model's reply. The one for the tenth
-case, where no risk triggers:
+The reply is plain text in two sections with fixed headers (SPEC §4). Run 1 of
+the first evaluation case, from the stored run of 2026-11-27 (3 218 input tokens,
+204 output, $0.008476, 2 976 ms), is also the recorded example the calculator
+offers when the service gave no answer:
 
 ```
 What happens and when
 
-Your ladder holds COP 75,000,000 in 3 rungs across 3 institutions. Rung 1, at Banco Andino, matures on 4 April 2027; rung 2, at Entidad B, on 5 May 2027; and rung 3, at Entidad A, on 5 June 2027. After withholding tax of COP 140,705, the ladder pays COP 3,376,928 in net interest.
+Your ladder holds COP 50,000,000 of principal in 3 rungs across 3 institutions.
+
+Rung 1 is at Banco Andino and matures on 4 April 2027. Rung 2 is at Cooperativa Ñame & Café and matures on 3 July 2027. Rung 3 is at Entidad B and matures on 1 October 2027. The next maturity is on 4 April 2027, 90 days from 4 January 2027.
+
+The ladder pays COP 3,109,733 in interest after COP 129,572 of withholding tax.
 
 Risks
 
@@ -72,11 +73,10 @@ No risks to flag with this data.
 ```
 
 When a risk triggers, the second section holds up to three bullets, each opening
-with a label from a closed vocabulary. The constructed reply for the second case
-ends with:
+with a label from a closed vocabulary. The second case's run 1 ends with:
 
 ```
-- Deposit-insurance ceiling: at Entidad A, principal plus gross interest comes to COP 50,069,493, which is COP 69,493 above the ceiling of COP 50,000,000.
+- Deposit-insurance ceiling: at Entidad A, principal plus interest before withholding tax comes to COP 50,069,493, which is COP 69,493 above the insurance ceiling of COP 50,000,000 you entered.
 ```
 
 ## The number stays honest
@@ -111,21 +111,29 @@ Nothing below is an estimate; each figure names where it comes from.
 The evaluation suite is ten cases in `evals/cases.json`, eight valid and two
 invalid, each a complete request body with its rules. The harness runs the same
 engine the endpoint runs to derive the allowed numbers, so ground truth cannot be
-influenced by whoever wrote the fixture. The last paid run, on 2026-10-29
-(`evals/runs/2026-10-29T23-18-30Z/`), is a run of version 1: Spanish replies
-under the Spanish prompt, judged by the v1 rules. It made 26 runs and 24 model
-calls, three per valid case, and every rule passed in every run. It cost
-$0.224490 at list prices, $0.00935 per call on average, and the handler answered,
-model call included, within 3 344 ms at the 95th percentile and 3 594 ms at
-worst. Those figures describe the Spanish system and are not comparable with
-version 2 results; no English run is stored yet, and under the rules of this
-version all 48 stored replies fail the language rule (SPEC §10.2). A stored run
-of this version can be re-scored for free: `npm run eval:replay` re-evaluates its
-replies with the rules as they are now and writes a report beside them, never
-rewriting the measurement. Given a v1 run it says the run is not comparable and
+influenced by whoever wrote the fixture. The last paid run, on 2026-11-27
+(`evals/runs/2026-11-27T01-06-08Z/`), is the first run of version 2: English
+replies under prompt v2. It made 26 runs and 24 model calls, three per valid
+case, with no verification retry, and all 245 verdicts passed. It cost $0.217322
+at list prices, $0.00906 per call on average, and the handler answered, model
+call included, within 2 976 ms at the 95th percentile and 3 550 ms at worst.
+
+Beside it, the last run of version 1, on 2026-10-29
+(`evals/runs/2026-10-29T23-18-30Z/`): Spanish replies under the Spanish prompt,
+judged by the v1 rules. It made 26 runs and 24 model calls too, and every rule
+passed in every run. It cost $0.224490, $0.00935 per call on average, and
+answered within 3 344 ms at the 95th percentile and 3 594 ms at worst. The two
+runs are verdicts of different rules on text in different languages, so their
+pass rates are not comparable (SPEC §10.2): under the rules of this version all
+48 stored replies of version 1 fail the language rule.
+
+A stored run of this version can be re-scored for free: `npm run eval:replay`
+re-evaluates its replies with the rules as they are now and writes a report
+beside them, never rewriting the measurement. On the run of 2026-11-27 it gives
+every stored verdict again. Given a v1 run it says the run is not comparable and
 writes nothing.
 
-The test suite is 771 tests in 29 files, and `npm run test:ci` runs it twice,
+The test suite is 775 tests in 29 files, and `npm run test:ci` runs it twice,
 under `TZ=America/Bogota` and under `TZ=UTC`, because every date is
 calendar-day arithmetic that must not depend on the host's zone. The upstream
 engine's own tests, 1 032 lines in 8 files, are among them.
@@ -160,10 +168,10 @@ a spend alarm watches the spend (SPEC §8.2).
 - **A spend alarm.** Two metric filters read the token counts from the log line;
   an alarm prices them at list prices over a sliding 24 hours and fires at $0.50
   (`DailySpendAlarmUsd`) through an SNS topic the owner subscribes to outside
-  the repository. At the mean measured on the v1 run that is about 53 requests,
-  below the cap by design. The hard ceiling is the Anthropic organization's
-  monthly spend limit, $20 as set on 2026-11-01, on a prepaid balance with
-  auto-reload off.
+  the repository. At the mean per call of the v1 run of 2026-10-29 that is about
+  53 requests, and at the mean of the v2 run about 55, below the cap by design.
+  The hard ceiling is the Anthropic organization's monthly spend limit, $20 as
+  set on 2026-11-01, on a prepaid balance with auto-reload off.
 - **CORS, which is not access control.** The URL names two origins,
   `https://estebancitox.github.io` and `http://localhost:5173`, the method
   `POST`, the header `content-type`, and exposes `retry-after`. It tells a
@@ -187,17 +195,17 @@ replay.
 ```sh
 npm ci
 npm run typecheck
-npm run test:ci          # 771 tests under TZ=America/Bogota, then under TZ=UTC
+npm run test:ci          # 775 tests under TZ=America/Bogota, then under TZ=UTC
 npm run verify:vendor    # the vendored engine against ../lab-cdt-ladder at the pinned commit
-npm run eval:replay -- evals/runs/2026-10-29T23-18-30Z/results.json   # free; exits 3: a v1 run is not comparable
+npm run eval:replay -- evals/runs/2026-11-27T01-06-08Z/results.json   # free: re-scores the stored replies of the v2 run
 ```
 
 A paid run needs the Anthropic API key in an AWS SSM SecureString, the name of
 that parameter in `API_KEY_PARAMETER`, and AWS credentials that may read it. The
 key itself is never an environment variable here. One run makes 24 model calls
 when no reply needs a verification retry, and writes
-`evals/runs/<timestamp>/results.json` and `report.md`. The v1 run of 2026-10-29
-cost about $0.22 at list prices; no English run has been priced yet:
+`evals/runs/<timestamp>/results.json` and `report.md`. At list prices the v2
+run of 2026-11-27 cost $0.217322, and the v1 run of 2026-10-29 $0.224490:
 
 ```sh
 API_KEY_PARAMETER=/lab-cdt-ladder-api/anthropic-api-key AWS_PROFILE=lab AWS_REGION=us-east-2 npm run eval:live
@@ -223,8 +231,9 @@ it.
   270 claims checked, 3 refuted, and the finding that moved the client out of
   the trust boundary.
 - `schemas/explain-request.v1.json`: the request schema, JSON Schema draft-07.
-- `evals/cases.json` and `evals/runs/`: the ten cases, version 2, and the two
-  stored runs of version 1, 2026-10-06 and 2026-10-29.
+- `evals/cases.json` and `evals/runs/`: the ten cases, version 2, and three
+  stored runs: two of version 1, 2026-10-06 and 2026-10-29, and the first of
+  version 2, 2026-11-27.
 - `src/handler.ts`, `src/limits.ts`, `src/budget.ts`, `src/response.ts`: the
   pipeline, the caps, the time budget, the fixed bodies.
 - `src/request/`: the byte cap, JSON, schema, engine validation and range limits.
