@@ -404,7 +404,7 @@ describe('replay: stored replies re-evaluated with the rules as they are now', (
     expect(report).toContain('| 9 | negative-amount | 1 | 1/1 |')
   })
 
-  it('a v2 run is comparable, and a v1 run is not: both stored runs record prompt v1 (SPEC §10.2)', async () => {
+  it('a v2 run is comparable, and a v1 run is not: both stored v1 runs record prompt v1 (SPEC §10.2)', async () => {
     const { V1_PROMPT_VERSION, comparable } = await import('./replay-core')
     expect(V1_PROMPT_VERSION).toBe('v1')
     expect(comparable({ promptVersion: 'v2' })).toBe(true)

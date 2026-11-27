@@ -16,6 +16,10 @@ build/
 .eval/
 samconfig.toml
 
+# What `npm run eval:replay` writes beside a stored run. A stored run is committed as it was
+# measured, results.json and report.md, and a replay of it is never part of it.
+evals/runs/*/report.replay.md
+
 # OS and editor noise
 .DS_Store
 *.swp

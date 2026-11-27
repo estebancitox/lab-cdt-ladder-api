@@ -16,6 +16,9 @@ reply. The market stays Colombian. Version 1, the Spanish system, is the tag
 [lab-cdt-ladder](https://estebancitox.github.io/lab-cdt-ladder/), the
 calculator this endpoint explains. The URL is public within two daily caps; past
 them a request answers 429 with a fixed message and a `retry-after` header.
+This version goes live when both repositories merge it to `main` and the
+endpoint is deployed (SPEC §9); before that, what is live is version 1, in
+Spanish.
 
 ## How a request is answered
 
@@ -122,10 +125,11 @@ Beside it, the last run of version 1, on 2026-10-29
 (`evals/runs/2026-10-29T23-18-30Z/`): Spanish replies under the Spanish prompt,
 judged by the v1 rules. It made 26 runs and 24 model calls too, and every rule
 passed in every run. It cost $0.224490, $0.00935 per call on average, and
-answered within 3 344 ms at the 95th percentile and 3 594 ms at worst. The two
-runs are verdicts of different rules on text in different languages, so their
-pass rates are not comparable (SPEC §10.2): under the rules of this version all
-48 stored replies of version 1 fail the language rule.
+answered within 3 344 ms at the 95th percentile and 3 594 ms at worst. Those
+figures describe the Spanish system and are not comparable with version 2
+results: a v1 verdict and a v2 verdict are verdicts of different rules on text
+in different languages (the head of the SPEC). Under the rules of this version
+all 48 stored replies of version 1 fail the language rule (SPEC §10.2).
 
 A stored run of this version can be re-scored for free: `npm run eval:replay`
 re-evaluates its replies with the rules as they are now and writes a report
