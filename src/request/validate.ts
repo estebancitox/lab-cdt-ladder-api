@@ -57,7 +57,7 @@ export function validateRequest(raw: string | Uint8Array): ValidationOutcome {
         source: 'api',
         code: 'invalid_json',
         path: '',
-        message: 'El cuerpo de la solicitud no es JSON válido.',
+        message: 'The request body is not valid JSON.',
       },
     ])
   }
@@ -99,7 +99,7 @@ function checkRanges(request: ExplainRequest): ApiIssue[] {
         source: 'api',
         code: 'principal_out_of_range',
         path: `rungs[${i}].principal`,
-        message: 'El monto no puede superar 1.000.000.000.000 pesos.',
+        message: 'The amount cannot exceed COP 1,000,000,000,000.',
       })
     }
     if (rung.days > MAX_RUNG_DAYS) {
@@ -107,14 +107,14 @@ function checkRanges(request: ExplainRequest): ApiIssue[] {
         source: 'api',
         code: 'days_out_of_range',
         path: `rungs[${i}].days`,
-        message: 'El plazo no puede superar 3.650 días.',
+        message: 'The term cannot exceed 3,650 days.',
       })
     } else if (rung.days > daysToLimit) {
       issues.push({
         source: 'api',
         code: 'maturity_out_of_range',
         path: `rungs[${i}].days`,
-        message: 'El vencimiento no puede ser posterior al 31 de diciembre de 9999.',
+        message: 'The maturity cannot be later than 31 December 9999.',
       })
     }
   })
@@ -131,7 +131,7 @@ function checkAsOfDate(request: ExplainRequest): ApiIssue[] {
         source: 'api',
         code: 'as_of_date_invalid',
         path: 'asOfDate',
-        message: 'La fecha de consulta no es válida.',
+        message: 'The as-of date is not valid.',
       },
     ]
   }
@@ -146,7 +146,7 @@ function checkAsOfDate(request: ExplainRequest): ApiIssue[] {
         source: 'api',
         code: 'as_of_date_after_last_maturity',
         path: 'asOfDate',
-        message: 'La fecha de consulta es posterior al último vencimiento de la escalera.',
+        message: "The as-of date is after the ladder's last maturity.",
       },
     ]
   }

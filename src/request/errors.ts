@@ -3,7 +3,7 @@
  * byte-exact against the SPEC: validate.test.ts compares it to the line parsed out of
  * SPEC.md rather than to a retyped copy.
  */
-export const ERROR_MESSAGE = 'No puedo explicar esta escalera: los datos recibidos no son válidos.'
+export const ERROR_MESSAGE = 'I cannot explain this ladder: the data received is not valid.'
 
 /** SPEC §7: the two refusal codes reachable before any model call. */
 export type ErrorCode = 'payload_too_large' | 'invalid_input'

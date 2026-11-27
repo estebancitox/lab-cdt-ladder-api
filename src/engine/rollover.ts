@@ -24,7 +24,7 @@ function computeCycle(
   isStub: boolean,
 ): RolloverCycle {
   const rate = periodRate(ea, days, base)
-  // Same cash-event policy as computeRung: gross rounded per cycle, retención
+  // Same cash-event policy as computeRung: gross rounded per cycle, withholding tax
   // on the rounded gross, so each row reproduces by hand from the previous.
   const grossInterest = roundCOP(principal * rate)
   if (!Number.isSafeInteger(grossInterest)) {

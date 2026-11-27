@@ -14,15 +14,15 @@ export function normalize(text: string): string {
     .join('\n')
     .replace(/\n{3,}/g, '\n\n') // 6
   t = t.trim() // 7
-  t = t.replace(/\$ (?=\d)/g, '$') // 8
+  t = t.replace(/\bCOP (?=\d)/g, 'COP') // 8
   t = t.replace(/ %/g, '%') // 9
   return t
 }
 
 /**
- * Lowercased and accent-folded, the form SPEC §11.3 defines the date vocabulary D in and
- * §11.10 compares its closed list in. Combining marks are dropped after NFD, so `ñ` folds to
- * `n` as well; the text and the vocabulary are folded the same way, which is all that matters.
+ * SPEC §11.10 step 2, folding: NFD, every combining mark deleted, then `toLowerCase()`. The
+ * marker list is written already folded, and the masked text is folded the same way before it
+ * is compared. Nothing else is folded: dates and headers are compared as written (§3.4).
  */
 export function fold(text: string): string {
   return text

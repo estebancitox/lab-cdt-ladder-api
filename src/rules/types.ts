@@ -11,11 +11,12 @@ export interface Verdict {
   evidence?: string
 }
 
-/** One rung as `mentions_every_rung` needs it: its position and the D renderings of its date. */
+/** One rung as `mentions_every_rung` needs it: its position and the full dates of its maturity. */
 export interface RungTruth {
   index: number
   maturityDate: string
-  renderings: readonly string[]
+  /** SPEC §11.4 step 1: the ISO, short and long renderings; no shorter one mentions a rung. */
+  fullDates: readonly string[]
 }
 
 /**

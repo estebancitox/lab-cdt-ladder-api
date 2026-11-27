@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/estebancitox/lab-cdt-ladder-api/schemas/explain-request.v1.json",
-  "title": "Explica mi escalera — request",
+  "title": "Explain my ladder: request",
   "type": "object",
   "additionalProperties": false,
   "required": ["asOfDate", "ladder"],

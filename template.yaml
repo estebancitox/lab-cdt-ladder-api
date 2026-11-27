@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >-
-  Explica mi escalera v1: one Lambda behind a buffered Function URL. Public (AuthType NONE) within
+  Explain my ladder v2: one Lambda behind a buffered Function URL. Public (AuthType NONE) within
   the SPEC 8.2 daily caps, or signed-only (AuthType AWS_IAM), as UrlAuthType says.
 
 Parameters:

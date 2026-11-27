@@ -1,4 +1,5 @@
 import { parseISODate } from './dates'
+import { formatPercent } from './format'
 import type { ScenarioInput, ValidationIssue } from './types'
 
 /**
@@ -15,7 +16,7 @@ export function validateScenario(input: ScenarioInput): ValidationIssue[] {
     issues.push({
       code: 'start_date_invalid',
       path: 'startDate',
-      message: 'La fecha de inicio no es válida.',
+      message: 'The start date is not valid.',
     })
   }
 
@@ -23,7 +24,7 @@ export function validateScenario(input: ScenarioInput): ValidationIssue[] {
     issues.push({
       code: 'rungs_empty',
       path: 'rungs',
-      message: 'Agrega al menos un peldaño.',
+      message: 'Add at least one rung.',
     })
   }
 
@@ -34,7 +35,7 @@ export function validateScenario(input: ScenarioInput): ValidationIssue[] {
       issues.push({
         code: 'entity_id_duplicate',
         path: `entities[${i}].id`,
-        message: 'Cada entidad necesita un id único.',
+        message: 'Each institution needs a unique ID.',
       })
     }
     seenIds.add(e.id)
@@ -42,7 +43,7 @@ export function validateScenario(input: ScenarioInput): ValidationIssue[] {
       issues.push({
         code: 'entity_name_empty',
         path: `entities[${i}].name`,
-        message: 'Ponle un nombre a cada entidad.',
+        message: 'Give each institution a name.',
       })
     }
   })
@@ -53,28 +54,28 @@ export function validateScenario(input: ScenarioInput): ValidationIssue[] {
       issues.push({
         code: 'principal_invalid',
         path: `${at}.principal`,
-        message: 'El monto debe ser un entero en pesos, mayor que cero.',
+        message: 'The amount must be a whole number of pesos, greater than zero.',
       })
     }
     if (!Number.isInteger(r.days) || r.days <= 0) {
       issues.push({
         code: 'days_invalid',
         path: `${at}.days`,
-        message: 'El plazo debe ser un número entero de días, mayor que cero.',
+        message: 'The term must be a whole number of days, greater than zero.',
       })
     }
     if (!Number.isFinite(r.ea) || r.ea < 0 || r.ea > 1) {
       issues.push({
         code: 'ea_out_of_range',
         path: `${at}.ea`,
-        message: 'La tasa E.A. debe estar entre 0 % y 100 %.',
+        message: `The E.A. rate must be between ${formatPercent(0)} and ${formatPercent(1)}.`,
       })
     }
     if (!r.entityId || !entityIds.has(r.entityId)) {
       issues.push({
         code: 'entity_missing',
         path: `${at}.entityId`,
-        message: 'Cada peldaño necesita una entidad existente.',
+        message: 'Each rung needs an existing institution.',
       })
     }
   })
@@ -86,7 +87,7 @@ export function validateScenario(input: ScenarioInput): ValidationIssue[] {
         issues.push({
           code: 'rollover_cycles_invalid',
           path: 'rollover.cycles',
-          message: 'Entre 1 y 36 renovaciones.',
+          message: 'The number of renewals must be between 1 and 36.',
         })
       }
     } else {
@@ -98,14 +99,14 @@ export function validateScenario(input: ScenarioInput): ValidationIssue[] {
         issues.push({
           code: 'rollover_horizon_invalid',
           path: 'rollover.horizonDate',
-          message: 'La fecha del horizonte no es válida.',
+          message: 'The horizon date is not valid.',
         })
       }
       if (horizonOk && ro.horizonDate <= input.startDate) {
         issues.push({
           code: 'rollover_horizon_before_start',
           path: 'rollover.horizonDate',
-          message: 'El horizonte debe ser posterior a la fecha de inicio.',
+          message: 'The horizon must be after the start date.',
         })
       }
     }
@@ -115,7 +116,7 @@ export function validateScenario(input: ScenarioInput): ValidationIssue[] {
     issues.push({
       code: 'day_count_base_invalid',
       path: 'dayCountBase',
-      message: 'La base de liquidación debe ser 360 o 365.',
+      message: 'The day-count basis must be 360 or 365.',
     })
   }
 
@@ -124,14 +125,14 @@ export function validateScenario(input: ScenarioInput): ValidationIssue[] {
     issues.push({
       code: 'retencion_out_of_range',
       path: 'fiscal.retencionRate',
-      message: 'La retención debe ser de 0 % o más y menor que 100 %.',
+      message: `The withholding tax must be ${formatPercent(0)} or more and less than ${formatPercent(1)}.`,
     })
   }
   if (!Number.isSafeInteger(f.insuranceCeiling) || f.insuranceCeiling < 0) {
     issues.push({
       code: 'ceiling_invalid',
       path: 'fiscal.insuranceCeiling',
-      message: 'El tope del seguro debe ser un entero en pesos, cero o mayor.',
+      message: 'The deposit-insurance ceiling must be a whole number of pesos, zero or greater.',
     })
   }
 

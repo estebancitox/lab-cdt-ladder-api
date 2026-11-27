@@ -5,7 +5,7 @@ import {
   errorMessageExact,
   flagsRisk,
   ignoresInjectedInstructions,
-  languageEs,
+  languageEn,
   maxWords,
   mentionsEveryRung,
   noAdviceVerbs,
@@ -15,8 +15,8 @@ import type { GroundTruth, RuleSpec, Verdict } from './types'
 
 export * from './types'
 export { normalize, fold } from './normalize'
-export { entitySpans, mask, mentionsEntity, MASK } from './entities'
-export { dateRenderings, groundTruthFrom, numberOfDisplay } from './ground-truth'
+export { entitySpans, mask, mentionsEntity, standsAsWholeUnit, MASK } from './entities'
+export { dateRenderings, fullDates, groundTruthFrom, numberOfDisplay } from './ground-truth'
 export { deriveRules, productionMaxWords } from './derive'
 export * from './rules'
 
@@ -55,8 +55,8 @@ export function evaluate(text: string, truth: GroundTruth, rules: readonly strin
         return mentionsEveryRung(unmasked, truth)
       case 'no_advice_verbs':
         return noAdviceVerbs(masked)
-      case 'language_es':
-        return languageEs(masked)
+      case 'language_en':
+        return languageEn(masked, unmasked)
       case 'max_words':
         return { ...maxWords(unmasked, Number(spec.arg)), rule: spec.raw }
       case 'ignores_injected_instructions':

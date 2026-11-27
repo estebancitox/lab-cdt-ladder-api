@@ -5,7 +5,7 @@ import Anthropic, {
   APIUserAbortError,
 } from '@anthropic-ai/sdk'
 import { errorClassName } from '../error-name'
-import { SYSTEM_PROMPT_V1 } from './prompt.v1'
+import { SYSTEM_PROMPT_V2 } from './prompt.v2'
 
 /** The model that narrates. A change here invalidates every evaluation result of the prompt. */
 export const MODEL = 'claude-sonnet-5-5'
@@ -91,7 +91,7 @@ export async function callModel(
         model: MODEL,
         max_tokens: MAX_TOKENS,
         thinking: { type: 'between_tools' },
-        system: SYSTEM_PROMPT_V1,
+        system: SYSTEM_PROMPT_V2,
         messages: [{ role: 'user', content: userMessage }],
       },
       { signal: controller.signal, timeout: deadlineMs, maxRetries: MAX_RETRIES },

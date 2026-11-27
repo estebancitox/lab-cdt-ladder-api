@@ -22,7 +22,7 @@ export function computeRung(
   dayCountBase: DayCountBase,
 ): RungResult {
   const rate = periodRate(rung.ea, rung.days, dayCountBase)
-  // Interest at maturity is a cash event: rounded per rung, and retención is
+  // Interest at maturity is a cash event: rounded per rung, and withholding tax is
   // computed on the rounded gross, so every table row reconciles by hand.
   const grossInterest = roundCOP(rung.principal * rate)
   if (!Number.isSafeInteger(grossInterest)) {
@@ -90,7 +90,7 @@ export function computeScenario(input: ScenarioInput): ScenarioResult {
       ),
     }
     // Exposure basis under rollover: the HIGHEST balance the chain reaches at
-    // any maturity, not the last one. Retención is withheld at each maturity,
+    // any maturity, not the last one. Withholding tax is deducted at each maturity,
     // so a short final stub can end below an earlier peak — taking the last
     // cycle would under-report coverage, the unsafe direction for a warning.
     exposureItems = perRung.map((p) => {

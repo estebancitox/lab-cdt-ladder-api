@@ -2,8 +2,8 @@
 
 Upstream: https://github.com/estebancitox/lab-cdt-ladder
 Upstream path: src/engine/
-Commit: 6444d05df4385343d5593b94d9e5822cad647e10
-Vendored: 2026-09-26
+Commit: 6e23cdd6ef1e02611fc82e908d7c6df1095641ce
+Vendored: 2026-11-26
 
 The 18 files below were extracted from the commit object with `git archive`, never from
 the working tree, and are never edited, not even for formatting or lint (SPEC §9). This
@@ -20,17 +20,17 @@ re-hashes the files on disk against this table on every test run and needs no si
 | dates.ts | c24d7ad892464dfb788e24afac1322c736d5e90b9b429c7afe70f9b2ac18d091 |
 | exposure.test.ts | da1ee6853dc748d44b5fb560de5d38f1629e1ae5023740b6b1864969239765e1 |
 | exposure.ts | 7437bcb3da33aff250d50b9fee0dc4dea131e64d2f382d9965ef2623ad1f58b6 |
-| format.test.ts | 6c670abf24e5cb0c54270010687c45b7a0d76d9e2ee297a8a49d3fc6fb38503e |
-| format.ts | fffdc0ab9a5f0d4d11e4254e56af9335523a94b9c75a92aa3d1d8b3d0982acda |
-| index.ts | 60d174afe5e6f2ffe963ba72790941eff7a89199071287e2adec7da77683059a |
+| format.test.ts | 0c2b7619642e8259983e66cc1c453fe018e74eee2d9290f3930dacf7b49c34f7 |
+| format.ts | 542969eb4c42fa50871822d8444f8616e1f3af58b1441a3a20f5fd48ea37a922 |
+| index.ts | e8f437cf32e5e41f2e2b90b1be7ab215b67a6ab6f7e59e392aac750b4c9d9944 |
 | money.test.ts | f86cb05be010ebf56f07beb09b98f619d6827a6bc53fabcca252214cf872cae2 |
 | money.ts | 3697fc73078db9961bdad15cae09b481de0b17920122786e062e9e711a05697e |
 | rates.test.ts | 1c183e1062b931891950ae7ee5a44dccfa7a87bd40b6199b679c412741d863e1 |
 | rates.ts | e0be8f668e8707dbb7c8b49cf7921afd89c254b2d2f9df284c8cdf4e8388796a |
 | rollover.test.ts | d908ff974a5c2d166f36d7d3c147a4b40a31b69d9b91a2496c9582c8ec435b5f |
-| rollover.ts | 1ecc2f41867c3c4d9da53a6d0be1fc3a1e99505e84c5283e7729ae7abf5fcb0c |
+| rollover.ts | 329dd1f378499aede7a12a894d4502e62c6861ae16bb83a1aa26596ff9915607 |
 | scenario.test.ts | a5f366d38628608104fb39caa96d74a3a4841b3577cca9e4fe81d904bba53f79 |
-| scenario.ts | 460ef8aa102ae82d02720e43c501a8e908f11534166abfbe28310121f9f80d4c |
-| types.ts | d4ff8b31ab04fe74d3b299989c9f07449445e9df50e37465b3716102c010bf8e |
-| validate.test.ts | 906a03b679cefd82e80546a4641a0f26daef03f32c3779f24a5a27e15f2c1331 |
-| validate.ts | f7abff49f9f50e78575cc6a3be6fbc535ce4e738cad9c1bbf388c5259318730b |
+| scenario.ts | 9b720a64edad594d6f2cd5e39e4e76b9f5e4e9e11a421f113a0dd6990c2dd228 |
+| types.ts | 51f21c3a14667c6b066a695ca46f283ac3e097e584ce74ff1fdc5d66b3a4232c |
+| validate.test.ts | d15d88ea3e87191e6e0dfc8f26fa4734dfe1e4c8716a896620183e4a1ebb3ce0 |
+| validate.ts | d4c2f758b1c7de733736fa805a659ecc3607e9d7ed2216979d7d652a9b0935ef |

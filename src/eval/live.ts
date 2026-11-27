@@ -1,8 +1,9 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { loadCases } from './cases'
 import { installFetchCounter } from './fetch-counter'
 import { renderReport } from './report'
-import { runSuite, type EvalCase } from './suite'
+import { runSuite } from './suite'
 
 /**
  * The paid run: every case of evals/cases.json through the handler in process, valid cases
@@ -19,7 +20,7 @@ async function main(): Promise<number> {
     )
     return 2
   }
-  const { cases } = JSON.parse(readFileSync('evals/cases.json', 'utf8')) as { cases: EvalCase[] }
+  const cases = loadCases()
   const startedAt = new Date().toISOString()
   const dir = join('evals', 'runs', startedAt.replace(/\.\d{3}Z$/, 'Z').replace(/:/g, '-'))
   const counter = installFetchCounter()

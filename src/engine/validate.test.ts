@@ -118,3 +118,81 @@ describe('validateScenario', () => {
     )
   })
 })
+
+describe('validateScenario — message wording', () => {
+  // The API returns these messages verbatim in its 400 responses, so the
+  // wording is contract. Each input below breaks exactly one rule.
+  const base = valid()
+  const rung = base.rungs[0]
+  const cases: [code: string, message: string, input: ScenarioInput][] = [
+    ['start_date_invalid', 'The start date is not valid.', { ...base, startDate: '2026-02-30' }],
+    ['rungs_empty', 'Add at least one rung.', { ...base, rungs: [] }],
+    [
+      'entity_id_duplicate',
+      'Each institution needs a unique ID.',
+      { ...base, entities: [...base.entities, { id: 'e1', name: 'Institution B' }] },
+    ],
+    [
+      'entity_name_empty',
+      'Give each institution a name.',
+      { ...base, entities: [{ id: 'e1', name: ' ' }] },
+    ],
+    [
+      'principal_invalid',
+      'The amount must be a whole number of pesos, greater than zero.',
+      { ...base, rungs: [{ ...rung, principal: 0 }] },
+    ],
+    [
+      'days_invalid',
+      'The term must be a whole number of days, greater than zero.',
+      { ...base, rungs: [{ ...rung, days: 0 }] },
+    ],
+    [
+      'ea_out_of_range',
+      'The E.A. rate must be between 0% and 100%.',
+      { ...base, rungs: [{ ...rung, ea: 13.5 }] },
+    ],
+    [
+      'entity_missing',
+      'Each rung needs an existing institution.',
+      { ...base, rungs: [{ ...rung, entityId: 'ghost' }] },
+    ],
+    [
+      'rollover_cycles_invalid',
+      'The number of renewals must be between 1 and 36.',
+      { ...base, rollover: { mode: 'cycles', cycles: 37 } },
+    ],
+    [
+      'rollover_horizon_invalid',
+      'The horizon date is not valid.',
+      { ...base, rollover: { mode: 'horizon', horizonDate: '2026-02-30' } },
+    ],
+    [
+      'rollover_horizon_before_start',
+      'The horizon must be after the start date.',
+      { ...base, rollover: { mode: 'horizon', horizonDate: base.startDate } },
+    ],
+    [
+      'day_count_base_invalid',
+      'The day-count basis must be 360 or 365.',
+      { ...base, dayCountBase: 364 as unknown as 360 },
+    ],
+    [
+      'retencion_out_of_range',
+      'The withholding tax must be 0% or more and less than 100%.',
+      { ...base, fiscal: { ...base.fiscal, retencionRate: 1 } },
+    ],
+    [
+      'ceiling_invalid',
+      'The deposit-insurance ceiling must be a whole number of pesos, zero or greater.',
+      { ...base, fiscal: { ...base.fiscal, insuranceCeiling: -5 } },
+    ],
+  ]
+
+  it('words each of the 14 issues exactly', () => {
+    expect(cases).toHaveLength(14)
+    for (const [code, message, input] of cases) {
+      expect(validateScenario(input).map((i) => [i.code, i.message])).toEqual([[code, message]])
+    }
+  })
+})
